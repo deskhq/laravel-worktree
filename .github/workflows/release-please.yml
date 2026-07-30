@@ -1,0 +1,40 @@
+name: release-please
+
+# One release line, cut from main. Unlike an application, a package has no
+# deploy to soak, so there is no release-candidate line here: Laravel's own
+# first-party packages (sail, prompts, horizon, framework) carry no rc/beta
+# tags at all, and anyone wanting unreleased code can require "dev-main".
+#
+# A `<major>.x` branch (laravel/sail's 1.x, horizon's 5.x) is for maintaining
+# an OLD major alongside a new one. Cut one only when 2.0 work begins; until
+# then main is the whole story, which is what laravel/boost, prompts, mcp and
+# pail all do.
+on:
+  push:
+    branches:
+      - main
+
+# Never cancel an in-flight release run: interrupting release-please can leave
+# a release PR or tag half-created.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: Propose or cut a release
+    runs-on: ubuntu-latest
+    steps:
+      # Uses the built-in GITHUB_TOKEN rather than a PAT. That is sufficient
+      # here because nothing downstream keys off the tag — Packagist publishes
+      # via its own webhook, not a workflow. If a workflow is ever added on
+      # `push: tags`, it will NOT fire: GitHub suppresses push triggers for
+      # refs created by GITHUB_TOKEN. Swap in a PAT at that point.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
