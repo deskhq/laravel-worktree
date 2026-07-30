@@ -1,17 +1,17 @@
 {
-    "name": ":vendor_slug/:package_slug",
-    "description": ":package_description",
+    "name": "deskhq/laravel-worktree",
+    "description": "Per-worktree isolation so multiple agents can work on a Laravel project concurrently",
     "keywords": [
-        ":vendor_name",
+        "DeskHQ",
         "laravel",
-        ":package_slug"
+        "laravel-worktree"
     ],
-    "homepage": "https://github.com/:vendor_slug/:package_slug",
+    "homepage": "https://github.com/deskhq/laravel-worktree",
     "license": "MIT",
     "authors": [
         {
-            "name": ":author_name",
-            "email": "author@domain.com",
+            "name": "Emmanuel Paul",
+            "email": "emmanuel.paul@outlook.com",
             "role": "Developer"
         }
     ],
@@ -21,9 +21,10 @@
         "illuminate/contracts": "^11.0||^12.0||^13.0"
     },
     "require-dev": {
+        "larastan/larastan": "^3.0",
+        "laravel/boost": "^2.4",
         "laravel/pint": "^1.14",
         "nunomaduro/collision": "^8.8",
-        "larastan/larastan": "^3.0",
         "orchestra/testbench": "^11.0.0||^10.0.0||^9.0.0",
         "pestphp/pest": "^4.0",
         "pestphp/pest-plugin-arch": "^4.0",
@@ -35,13 +36,13 @@
     },
     "autoload": {
         "psr-4": {
-            "VendorName\\Skeleton\\": "src/",
-            "VendorName\\Skeleton\\Database\\Factories\\": "database/factories/"
+            "DeskHQ\\LaravelWorktree\\": "src/",
+            "DeskHQ\\LaravelWorktree\\Database\\Factories\\": "database/factories/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "VendorName\\Skeleton\\Tests\\": "tests/",
+            "DeskHQ\\LaravelWorktree\\Tests\\": "tests/",
             "Workbench\\App\\": "workbench/app/"
         }
     },
@@ -51,7 +52,8 @@
         "analyse": "vendor/bin/phpstan analyse",
         "test": "vendor/bin/pest",
         "test-coverage": "vendor/bin/pest --coverage",
-        "format": "vendor/bin/pint"
+        "format": "vendor/bin/pint",
+        "boost-update": "@php vendor/bin/testbench boost:update --ansi"
     },
     "config": {
         "sort-packages": true,
@@ -63,10 +65,10 @@
     "extra": {
         "laravel": {
             "providers": [
-                "VendorName\\Skeleton\\SkeletonServiceProvider"
+                "DeskHQ\\LaravelWorktree\\LaravelWorktreeServiceProvider"
             ],
             "aliases": {
-                "Skeleton": "VendorName\\Skeleton\\Facades\\Skeleton"
+                "LaravelWorktree": "DeskHQ\\LaravelWorktree\\Facades\\LaravelWorktree"
             }
         }
     },

@@ -1,12 +1,12 @@
 <?php
 
-namespace VendorName\Skeleton\Commands;
+namespace DeskHQ\LaravelWorktree\Commands;
 
 use Illuminate\Console\Command;
 
-class SkeletonCommand extends Command
+class LaravelWorktreeCommand extends Command
 {
-    public $signature = 'skeleton';
+    public $signature = 'laravel-worktree';
 
     public $description = 'My command';
 
