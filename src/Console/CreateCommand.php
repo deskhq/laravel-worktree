@@ -7,6 +7,7 @@ use DeskHQ\LaravelWorktree\Bootstrap\Pipeline;
 use DeskHQ\LaravelWorktree\Bootstrap\Readiness;
 use DeskHQ\LaravelWorktree\Compose\ComposeVersion;
 use DeskHQ\LaravelWorktree\Compose\Overlay;
+use DeskHQ\LaravelWorktree\Compose\PublishedPorts;
 use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Config\EnvFile;
 use DeskHQ\LaravelWorktree\Exceptions\UsageException;
@@ -134,6 +135,10 @@ final readonly class CreateCommand implements Command
         if ($entry !== null && ! $invocation->has(self::Refresh) && $this->readiness()->isReady($identity->path)) {
             $outcome = $this->reenter($identity, $entry, $config, $anchor, $runtime);
         } else {
+            // The last free moment: after this a slot is claimed, a directory
+            // exists and a refusal costs a teardown. Pure parsing, no daemon.
+            PublishedPorts::of($anchor->mainRoot)->verify($config);
+
             $entry = $allocator->allocate(
                 $identity->key,
                 $anchor->mainRoot,

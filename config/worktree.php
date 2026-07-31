@@ -148,6 +148,15 @@ return [
     | worktree to start reverb then dies on `Bind for :::6379 failed`. Every
     | published port on every transitively started service needs an entry here.
     |
+    | Both traps are checked rather than left to be read. Before a create claims
+    | a slot, the package works out which services the worktree actually starts
+    | — the app service, keep_services below, whatever a `sail up -d <service>`
+    | step brings up, and the transitive closure of depends_on over all of it —
+    | and refuses when any of them publishes a host port nothing moves per
+    | worktree, naming the service, the mapping and the chain that started it.
+    | A variable pinned here without a {{port.*}} placeholder counts as unmoved:
+    | mentioning it is not offsetting it.
+    |
     */
 
     'env' => [],

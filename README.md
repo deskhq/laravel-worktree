@@ -440,6 +440,8 @@ The container port never moves, so anything the application dials over the Compo
 
 **A service with a `depends_on` you did not account for.** Redis often has to be offset not because anything talks to it from the host, but because `reverb` pulls it in through its own `depends_on`, and it publishes `'${FORWARD_REDIS_PORT:-6379}:6379'` when it does. The second worktree to start reverb then dies on `Bind for :::6379 failed`. Every published port on every transitively started service needs an entry.
 
+That one is checked rather than left to be read — see [the published-port pre-flight](#the-published-port-pre-flight).
+
 ### `APP_ENV`, and the file Sail actually reads
 
 ```bash
@@ -479,6 +481,34 @@ services:
 `keep_services` trims whichever service `APP_SERVICE` names, falling back to Sail's `laravel.test`; the mappings in `port_overrides` take the same placeholders as `env`. An empty `keep_services` is not "depend on nothing" — it leaves `depends_on` as `compose.yaml` declares it. With neither set, no overlay is written at all.
 
 The `!override` merge tag is what makes this a replacement rather than a merge, and it needs Docker Compose >= 2.24. That is a pre-flight, with the version named, because an older Compose merges the two lists instead and quietly starts everything.
+
+### The published-port pre-flight
+
+The second of the [two traps](#two-traps) is a rule the package has everything it needs to check: it has the configuration, and the application's `compose.yaml` is right there. So it checks it, before a create claims a slot and before a single file is generated.
+
+It first works out which services the worktree will actually run:
+
+1. the app service — `APP_SERVICE`, or Sail's `laravel.test`;
+2. whatever that service depends on, which is `compose.keep_services` when the overlay trims it and `compose.yaml`'s own list when it does not;
+3. every service a bootstrap step brings up by hand — `['sail' => 'up -d reverb']`, which no `depends_on` anywhere mentions;
+4. and then the transitive closure of `depends_on` over all of that.
+
+Then, for each of those, it reads every `ports:` mapping that names a host port and pulls the host-side variable out of it: `'${FORWARD_REDIS_PORT:-6379}:6379'` → `FORWARD_REDIS_PORT`. A mapping is covered when `env` assigns that variable a `{{port.*}}` placeholder, or when the service has a `port_overrides` entry — which replaces its whole `ports:` list, so what `compose.yaml` published for it no longer applies. Anything else is refused:
+
+```
+error: config/worktree.php: 1 published host port would be the same in every worktree, so the
+second one to start would die on a Docker bind error naming a port nothing here configures:
+
+  redis publishes '${FORWARD_REDIS_PORT:-6379}:6379'
+    started because reverb depends on it, and the bootstrap step 'sail up -d reverb' starts it
+    add 'FORWARD_REDIS_PORT' => '{{port.redis}}' to 'env'
+```
+
+Step 4 is the whole point, and the reason a refusal names the chain rather than only the service: `redis` is in nothing the application can see — it arrives because `reverb` depends on it, and `reverb` arrives because a bootstrap step starts it. Without this the failure surfaces on the *second* worktree, minutes into a bootstrap, as `Bind for :::6379 failed`.
+
+A refusal rather than a warning, because a warning here is one nobody reads until the bind error arrives anyway. Two cases get their own message, because *"add it to `env`"* is no help in either. A literal host port — `'8025:8025'`, with no variable in it — has nothing for `env` to assign, so `port_overrides` is the only fix. And a variable `env` assigns a **fixed** value to is not offset by having been mentioned: that is [trap 1](#two-traps) exactly, `REVERB_PORT` pinned for the container's sake and never remapped on the published side.
+
+The check is pure parsing: no daemon, nothing to start, and no cost to a create that passes it. Two limits follow from that. `include:` and `extends:` are not followed, so a service reached only through one of those is invisible to it. And profiles are modelled only far enough to keep a bare `sail up -d` from counting a profiled service as started.
 
 ### Not `compose.override.yaml`
 

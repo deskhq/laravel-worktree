@@ -268,6 +268,46 @@ it('treats being called wrong as a usage error, not a failed run', function (arr
     'more than a name and a base' => [['feat/checkout', 'main', 'extra'], 'create takes a name and, at most, a base to fork from'],
 ]);
 
+/**
+ * The pre-flight, from the outside: the whole point of it is that it costs
+ * nothing and happens before anything is claimed, generated or attached — a
+ * refusal after `git worktree add` would leave a directory and a slot behind to
+ * be cleaned up by hand.
+ */
+it('refuses a create whose started services publish a host port nothing offsets', function () {
+    file_put_contents($this->main.'/compose.yaml', <<<'YAML'
+        services:
+            laravel.test:
+                ports:
+                    - '${APP_PORT:-80}:80'
+                depends_on:
+                    - redis
+            redis:
+                ports:
+                    - '${FORWARD_REDIS_PORT:-6379}:6379'
+        YAML);
+
+    $process = worktreeCreate();
+
+    expect($process)->toHaveExited(1)
+        ->and($process->getOutput())->toBe('')
+        ->and($process->getErrorOutput())
+        ->toContain("redis publishes '\${FORWARD_REDIS_PORT:-6379}:6379'")
+        ->toContain('started because laravel.test depends on it, and it is the app service')
+        ->toContain("add 'FORWARD_REDIS_PORT' => '{{port.redis}}' to 'env'")
+        // Nothing claimed, nothing attached, nothing generated.
+        ->and($this->home.'/registry.json')->not->toBeFile()
+        ->and($this->worktree)->not->toBeDirectory();
+
+    configureRepository(['env' => [
+        'APP_PORT' => '{{port.app}}',
+        'COMPOSE_PROJECT_NAME' => '{{project}}',
+        'FORWARD_REDIS_PORT' => '{{port.redis}}',
+    ]]);
+
+    expect(worktreeCreate())->toHaveSucceeded();
+});
+
 it('refuses to work in a worktree somebody has switched branches in', function () {
     worktreeCreate();
 

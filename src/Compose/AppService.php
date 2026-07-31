@@ -3,6 +3,8 @@
 namespace DeskHQ\LaravelWorktree\Compose;
 
 use DeskHQ\LaravelWorktree\Config\Assignments;
+use DeskHQ\LaravelWorktree\Config\Env;
+use DeskHQ\LaravelWorktree\Config\EnvFile;
 
 /**
  * What this application calls its app service.
@@ -34,6 +36,32 @@ final readonly class AppService
         // `${APP_SERVICE:-"laravel.test"}` — to a shell, an empty assignment is
         // no more set than an absent one.
         return $service === null || $service === '' ? self::Default : $service;
+    }
+
+    /**
+     * The same question asked of a checkout rather than of a file, for the
+     * moment before the worktree exists to have one.
+     *
+     * The candidates are {@see EnvFile}'s, in its order and for its reason:
+     * `bin/sail` sources `.env.<APP_ENV>` in preference to `.env` when the
+     * *shell* exported one, and a repository that ships neither still has an
+     * `.env.example` that says what it calls the service.
+     */
+    public static function at(string $root): string
+    {
+        $exported = Env::exportedEnvironment();
+
+        $candidates = $exported === null ? [] : ['.env.'.$exported];
+        $candidates[] = '.env';
+        $candidates[] = EnvFile::Example;
+
+        foreach ($candidates as $name) {
+            if (is_file($root.'/'.$name)) {
+                return self::in(Assignments::read($root.'/'.$name));
+            }
+        }
+
+        return self::Default;
     }
 
     private function __construct() {}
