@@ -1,5 +1,6 @@
 <?php
 
+use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Tests\TestCase;
 use Symfony\Component\Process\Process;
 
@@ -55,6 +56,74 @@ function deleteDirectory(string $path): void
     }
 
     rmdir($path);
+}
+
+/**
+ * A configuration whose machine-global home is $home, so a test allocates slots
+ * in a directory of its own rather than in the developer's real one.
+ *
+ * @param  array<string, mixed>  $config  As `config/worktree.php` would have returned it.
+ */
+function configurationIn(string $home, array $config = []): Configuration
+{
+    $restore = $_SERVER['WORKTREE_HOME'] ?? null;
+    $_SERVER['WORKTREE_HOME'] = $home;
+
+    try {
+        return Configuration::fromArray($config);
+    } finally {
+        if ($restore === null) {
+            unset($_SERVER['WORKTREE_HOME']);
+        } else {
+            $_SERVER['WORKTREE_HOME'] = $restore;
+        }
+    }
+}
+
+/**
+ * A `port_base` whose whole window is free on this machine right now.
+ *
+ * Allocation probes the ports it is about to claim, so a real service on the
+ * developer's machine would otherwise decide which slot a test gets.
+ */
+function freePortBase(int $span = 100): int
+{
+    for ($attempt = 0; $attempt < 50; $attempt++) {
+        $base = random_int(30000, 60000 - $span);
+
+        if (portsAreFree(range($base, $base + $span - 1))) {
+            return $base;
+        }
+    }
+
+    throw new RuntimeException("could not find $span consecutive free ports to test against");
+}
+
+/**
+ * @param  list<int>  $ports
+ */
+function portsAreFree(array $ports): bool
+{
+    $sockets = [];
+    $free = true;
+
+    foreach ($ports as $port) {
+        $socket = @stream_socket_server("tcp://0.0.0.0:$port", $code, $message, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN);
+
+        if ($socket === false) {
+            $free = false;
+
+            break;
+        }
+
+        $sockets[] = $socket;
+    }
+
+    foreach ($sockets as $socket) {
+        fclose($socket);
+    }
+
+    return $free;
 }
 
 /**
