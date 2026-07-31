@@ -317,6 +317,7 @@ function diagnosticsIn($diagnostics): string
  * @param  list<string>  $containers  Ids the container label query answers with.
  * @param  list<string>  $volumes  Names the volume label query answers with.
  * @param  list<string>  $refuses  Resources whose removal fails, as one still in use would.
+ * @param  array<string, array{containers?: int, volumes?: int}>  $projects  What each Compose project on this daemon owns, for the census `list` and `reap` scan by.
  * @param  bool  $daemon  Whether `docker info` succeeds at all.
  * @param  bool  $composeSubcommand  Whether `docker compose` exists, or only the standalone binary.
  * @param  bool  $producesSail  Whether `docker run` leaves a `vendor/bin/sail` behind, as the Composer image would.
@@ -326,6 +327,7 @@ function fakeDockerBinary(
     array $containers = [],
     array $volumes = [],
     array $refuses = [],
+    array $projects = [],
     bool $daemon = true,
     int $composeExitCode = 0,
     string $composeOutput = '',
@@ -336,7 +338,10 @@ function fakeDockerBinary(
 
     is_dir($state) || mkdir($state, 0755, true);
 
-    foreach (['containers' => $containers, 'volumes' => $volumes, 'refuses' => $refuses] as $name => $lines) {
+    $files = ['containers' => $containers, 'volumes' => $volumes, 'refuses' => $refuses]
+        + projectCensus($projects);
+
+    foreach ($files as $name => $lines) {
         file_put_contents($state.'/'.$name, $lines === [] ? '' : implode("\n", $lines)."\n");
     }
 
@@ -365,6 +370,20 @@ function fakeDockerBinary(
         fi
 
         [ '{$answers['daemon']}' = yes ] || exit 1
+
+        # The census the orphan scan reads: one line per resource, carrying the
+        # project it belongs to, rather than the ids the per-project queries ask
+        # for. Both are label queries; only the filter and the format differ.
+        case "\$1 \$2 \$3" in
+            'ps -a --filter')
+                cat "\$STATE/container-projects"
+                exit 0
+                ;;
+            'volume ls --filter')
+                cat "\$STATE/volume-projects"
+                exit 0
+                ;;
+        esac
 
         # The resource a removal names is always its last argument.
         for LAST in "\$@"; do :; done
@@ -426,6 +445,26 @@ function fakeDockerBinary(
     chmod($binary.'-compose', 0755);
 
     return $binary;
+}
+
+/**
+ * The label census as Docker prints it: one line per container, and one per
+ * volume, each carrying the Compose project it belongs to.
+ *
+ * @param  array<string, array{containers?: int, volumes?: int}>  $projects
+ * @return array{container-projects: list<string>, volume-projects: list<string>}
+ */
+function projectCensus(array $projects): array
+{
+    $census = ['container-projects' => [], 'volume-projects' => []];
+
+    foreach ($projects as $project => $owned) {
+        foreach (['containers' => 'container-projects', 'volumes' => 'volume-projects'] as $kind => $file) {
+            $census[$file] = [...$census[$file], ...array_fill(0, $owned[$kind] ?? 0, (string) $project)];
+        }
+    }
+
+    return $census;
 }
 
 /**

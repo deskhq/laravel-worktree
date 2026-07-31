@@ -42,13 +42,14 @@ it('reports the containerised refusal for every command', function (string $comm
 /**
  * A command the roadmap has not built yet, deliberately: this asserts that the
  * facade reaches the binary and hands back what it said, and `create` reaching
- * it would build a worktree of this repository on the machine running the suite.
+ * it would build a worktree of this repository on the machine running the suite
+ * — while `list` would read the developer's own registry.
  */
 it('delegates to the host binary when it is on the host', function () {
     pretendToBeContainerised(false);
 
-    $this->artisan('worktree:list')
-        ->expectsOutputToContain('list is not implemented yet')
+    $this->artisan('worktree:remove')
+        ->expectsOutputToContain('remove is not implemented yet')
         ->assertExitCode(1);
 });
 
@@ -56,12 +57,16 @@ it('delegates to the host binary when it is on the host', function () {
  * Artisan parses options itself and rejects the ones its signature does not
  * declare, so a flag the binary understands has to be declared on the facade
  * and passed back on — a facade that swallowed `--json` would print a path
- * where a script was reading an object.
+ * where a script was reading an object, and one that swallowed `--all` would
+ * answer about this repository a question asked about the machine.
  */
-it('forwards the flags the host binary understands', function () {
+it('forwards the flags the host binary understands', function (string $command, array $parameters, string $forwarded) {
     pretendToBeContainerised(true);
 
-    $this->artisan('worktree:create', ['arguments' => ['441'], '--refresh' => true, '--json' => true])
-        ->expectsOutputToContain('Use:  ./vendor/bin/worktree create 441 --refresh --json')
+    $this->artisan($command, $parameters)
+        ->expectsOutputToContain('Use:  ./vendor/bin/worktree '.$forwarded)
         ->assertExitCode(1);
-});
+})->with([
+    ['worktree:create', ['arguments' => ['441'], '--refresh' => true, '--json' => true], 'create 441 --refresh --json'],
+    ['worktree:list', ['--all' => true, '--json' => true], 'list --all --json'],
+]);

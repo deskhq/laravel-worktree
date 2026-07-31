@@ -45,7 +45,7 @@ final class Application
 
         return $application
             ->register(new CreateCommand($output, new Emitter, $runner, $shutdown))
-            ->register(new UnimplementedCommand('list', '', 'Show this repository\'s worktrees, slots and ports.', $output))
+            ->register(new ListCommand($output, new Emitter, $runner))
             ->register(new UnimplementedCommand('remove', '<slug>', 'Tear down a worktree\'s containers and volumes, and free its slot.', $output))
             ->register(new UnimplementedCommand('reap', '', 'Remove stray worktree projects left on this machine.', $output));
     }

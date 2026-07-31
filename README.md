@@ -44,7 +44,7 @@ worktree must run on the host, not inside the container.
 Use:  ./vendor/bin/worktree create 441
 ```
 
-`list`, `remove` and `reap` are not implemented yet; each one lands with its own issue.
+`remove` and `reap` are not implemented yet; each one lands with its own issue.
 
 ## Creating, resuming and re-entering
 
@@ -91,6 +91,47 @@ A registry entry whose directory somebody has deleted by hand is none of the thr
 9. the path on stdout, and then any degrade notices on stderr
 
 The per-worktree lock is taken before anything is read and held until the process exits, so a stray second `create 441` waits and then re-enters rather than racing the first through git, Composer, Sail and npm in one directory. The registry lock covers the free-slot search and the claim that follows it and nothing else — held across a five-minute bootstrap, it would serialise every unrelated worktree on the machine.
+
+## Listing
+
+```bash
+worktree list [--all] [--json]
+```
+
+One row per worktree on stdout, in slot order:
+
+```
+KEY                      SLOT  APP    VITE   REVERB  DB     REDIS  BRANCH         PATH
+wt-the-desk-441-fix-log  0     20000  20001  20002   20003  20004  441-fix-login  /Users/…/the-desk-worktrees/441-fix-login
+wt-the-desk-feat-search  1     20010  20011  20012   20013  20014  feat/search    /Users/…/the-desk-worktrees/feat-search
+```
+
+The port columns are whatever `ports` names, in the order it names them, so a repository that publishes a `meilisearch` port gets a `MEILISEARCH` column without this command knowing anything about it. Fields go out tab-separated and are aligned by `column -t`; where there is no `column`, the tabs are what you get, and `awk -F'\t'` reads the same fields either way.
+
+It shows the checkout it was run from. `--all` widens it to the machine — which the machine-global registry is what makes meaningful, and which is the fastest way to answer *what is holding port 20012?*, since that port may well belong to a clone in somebody else's terminal.
+
+`--json` emits the registry entries instead, on one line, as `create --json` emits one:
+
+```bash
+worktree list --json | jq -r '.[] | select(.degraded | length > 0) | .project'
+```
+
+An empty registry is a line on stderr rather than a header with nothing under it — except under `--json`, where `[]` is the answer a script asked for.
+
+### The orphan warning
+
+A worktree torn down by hand, a teardown interrupted partway, or a registry file that was lost, all leave the same thing behind: containers and volumes under a `wt-` project name that no entry claims. `list` names them, on **stderr**:
+
+```
+2 projects of the-desk still on this daemon that no worktree claims:
+  wt-the-desk-441-fix-login  4 containers, 3 volumes
+  wt-the-desk-feat-checkout  0 containers, 3 volumes
+'worktree reap' removes them
+```
+
+Which is what makes `reap` discoverable at the moment it is relevant, rather than after the disk fills. It is on stderr because the table is a contract: a diagnostic printed between rows would be read as a row, and `worktree list | wc -l` would count it.
+
+The scan is the one `reap` destroys by — a warning about something `reap` would not touch teaches people to ignore the warning, and the reverse is worse. So it is scoped identically: the `wt-` marker, narrowed to this repository unless `--all`, minus everything the registry claims from any checkout. It is silent when there is nothing to say, and silent when there is no daemon to ask: with nothing answering, a clean bill of health would be inferred rather than established.
 
 ## Configuration
 
