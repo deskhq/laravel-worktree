@@ -90,7 +90,7 @@ final class Application
         $command = $this->commands[$name] ?? null;
 
         if ($command === null) {
-            $this->output->error("unknown command: {$name}");
+            $this->output->error("unknown command: $name");
             $this->printUsage();
 
             return ExitCode::Usage;

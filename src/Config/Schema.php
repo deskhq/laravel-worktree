@@ -82,7 +82,7 @@ final readonly class Schema
     {
         foreach (array_keys($config) as $key) {
             if (! array_key_exists($key, self::Defaults)) {
-                throw self::error("unknown key '{$key}'".self::suggestion((string) $key, array_keys(self::Defaults)));
+                throw self::error("unknown key '$key'".self::suggestion((string) $key, array_keys(self::Defaults)));
             }
         }
 
@@ -94,13 +94,13 @@ final readonly class Schema
         $ports = self::ports($merged['ports']);
 
         if (count($ports) > $portStride) {
-            throw self::error('ports names '.count($ports)." ports but port_stride is {$portStride}; neighbouring slots would overlap");
+            throw self::error('ports names '.count($ports)." ports but port_stride is $portStride; neighbouring slots would overlap");
         }
 
         $highest = $portBase + $slots * $portStride - 1;
 
         if ($highest > 65535) {
-            throw self::error("slots ({$slots}) at stride {$portStride} from port_base {$portBase} runs past 65535");
+            throw self::error("slots ($slots) at stride $portStride from port_base $portBase runs past 65535");
         }
 
         return [
@@ -121,15 +121,15 @@ final readonly class Schema
         // A value that came from env() is a string: `env('WORKTREE_SLOTS', 50)`
         // reads 50 from the file and '50' from the environment.
         if (! is_int($value) && ! (is_string($value) && preg_match('/\A-?\d+\z/', $value) === 1)) {
-            throw self::error("{$key} must be an integer, ".self::describe($value).' given');
+            throw self::error("$key must be an integer, ".self::describe($value).' given');
         }
 
         $number = (int) $value;
 
         if ($number < $minimum || ($maximum !== null && $number > $maximum)) {
-            $range = $maximum === null ? "at least {$minimum}" : "between {$minimum} and {$maximum}";
+            $range = $maximum === null ? "at least $minimum" : "between $minimum and $maximum";
 
-            throw self::error("{$key} must be {$range}, {$number} given");
+            throw self::error("$key must be $range, $number given");
         }
 
         return $number;
@@ -148,11 +148,11 @@ final readonly class Schema
 
         foreach ($value as $index => $name) {
             if (! is_string($name) || preg_match('/\A[a-z][a-z0-9_]*\z/', $name) !== 1) {
-                throw self::error("ports.{$index} must be a lowercase name like 'app', ".self::describe($name).' given');
+                throw self::error("ports.$index must be a lowercase name like 'app', ".self::describe($name).' given');
             }
 
             if (in_array($name, $names, true)) {
-                throw self::error("ports names '{$name}' twice; each port takes its own offset within a slot");
+                throw self::error("ports names '$name' twice; each port takes its own offset within a slot");
             }
 
             $names[] = $name;
@@ -168,7 +168,7 @@ final readonly class Schema
         }
 
         if (! is_string($value)) {
-            throw self::error("{$key} must be a string or null, ".self::describe($value).' given');
+            throw self::error("$key must be a string or null, ".self::describe($value).' given');
         }
 
         return $value;
@@ -184,7 +184,7 @@ final readonly class Schema
         $slug = self::optionalString($value, 'repo_slug');
 
         if ($slug !== null && preg_match('/\A[a-z0-9][a-z0-9_-]*\z/', $slug) !== 1) {
-            throw self::error("repo_slug must be a valid Compose project name ([a-z0-9][a-z0-9_-]*), '{$slug}' given");
+            throw self::error("repo_slug must be a valid Compose project name ([a-z0-9][a-z0-9_-]*), '$slug' given");
         }
 
         return $slug;
@@ -207,7 +207,7 @@ final readonly class Schema
             }
 
             if ($entry !== null && ! is_scalar($entry)) {
-                throw self::error("env.{$name} must be a scalar or null, ".self::describe($entry).' given');
+                throw self::error("env.$name must be a scalar or null, ".self::describe($entry).' given');
             }
 
             $variables[$name] = $entry;
@@ -227,7 +227,7 @@ final readonly class Schema
 
         foreach (array_keys($value) as $key) {
             if (! in_array($key, self::ComposeKeys, true)) {
-                throw self::error("compose: unknown key '{$key}'".self::suggestion((string) $key, self::ComposeKeys));
+                throw self::error("compose: unknown key '$key'".self::suggestion((string) $key, self::ComposeKeys));
             }
         }
 
@@ -239,7 +239,7 @@ final readonly class Schema
 
         foreach ($services as $index => $service) {
             if (! is_string($service) || $service === '') {
-                throw self::error("compose.keep_services.{$index} must be a service name, ".self::describe($service).' given');
+                throw self::error("compose.keep_services.$index must be a service name, ".self::describe($service).' given');
             }
         }
 
@@ -257,12 +257,12 @@ final readonly class Schema
             }
 
             if (! is_array($ports) || ! array_is_list($ports)) {
-                throw self::error("compose.port_overrides.{$service} must be a list of port mappings, ".self::describe($ports).' given');
+                throw self::error("compose.port_overrides.$service must be a list of port mappings, ".self::describe($ports).' given');
             }
 
             foreach ($ports as $index => $mapping) {
                 if (! is_string($mapping) || $mapping === '') {
-                    throw self::error("compose.port_overrides.{$service}.{$index} must be a port mapping like '{{port.reverb}}:8080', ".self::describe($mapping).' given');
+                    throw self::error("compose.port_overrides.$service.$index must be a port mapping like '{{port.reverb}}:8080', ".self::describe($mapping).' given');
                 }
             }
 
@@ -285,10 +285,10 @@ final readonly class Schema
 
         foreach ($value as $index => $step) {
             if (! is_array($step)) {
-                throw self::error("steps.{$index} must be an array of step keys, ".self::describe($step).' given');
+                throw self::error("steps.$index must be an array of step keys, ".self::describe($step).' given');
             }
 
-            $steps[] = self::step($step, "steps.{$index}");
+            $steps[] = self::step($step, "steps.$index");
         }
 
         return $steps;
@@ -302,7 +302,7 @@ final readonly class Schema
     {
         foreach (array_keys($step) as $key) {
             if (! in_array($key, self::StepKeys, true)) {
-                throw self::error("{$where}: unknown key '{$key}'".self::suggestion((string) $key, self::StepKeys));
+                throw self::error("$where: unknown key '$key'".self::suggestion((string) $key, self::StepKeys));
             }
         }
 
@@ -312,8 +312,8 @@ final readonly class Schema
             $named = implode(', ', self::StepActions);
 
             throw self::error(count($actions) === 0
-                ? "{$where} runs nothing; give it one of {$named}"
-                : "{$where} names ".implode(' and ', $actions).", but a step runs one command; use one of {$named}");
+                ? "$where runs nothing; give it one of $named"
+                : "$where names ".implode(' and ', $actions).", but a step runs one command; use one of $named");
         }
 
         $validated = [];
@@ -322,11 +322,11 @@ final readonly class Schema
             $validated[$key] = match ($key) {
                 'allow_failure' => is_bool($entry)
                     ? $entry
-                    : throw self::error("{$where}.allow_failure must be true or false, ".self::describe($entry).' given'),
+                    : throw self::error("$where.allow_failure must be true or false, ".self::describe($entry).' given'),
                 'when' => self::condition($entry, $where),
                 default => is_string($entry) && $entry !== ''
                     ? $entry
-                    : throw self::error("{$where}.{$key} must be a non-empty string, ".self::describe($entry).' given'),
+                    : throw self::error("$where.$key must be a non-empty string, ".self::describe($entry).' given'),
             };
         }
 
@@ -338,7 +338,7 @@ final readonly class Schema
         $conditions = implode(', ', array_map(fn (string $condition) => $condition.':', self::Conditions));
 
         if (! is_string($value) || preg_match('/\A('.implode('|', self::Conditions).'):(.+)\z/', $value) !== 1) {
-            throw self::error("{$where}.when must be one of {$conditions}, ".self::describe($value).' given');
+            throw self::error("$where.when must be one of $conditions, ".self::describe($value).' given');
         }
 
         return $value;
@@ -361,12 +361,12 @@ final readonly class Schema
             }
         }
 
-        return $closest !== null && $distance <= 3 ? " (did you mean '{$closest}'?)" : '';
+        return $closest !== null && $distance <= 3 ? " (did you mean '$closest'?)" : '';
     }
 
     private static function describe(mixed $value): string
     {
-        return is_string($value) ? "'{$value}'" : get_debug_type($value);
+        return is_string($value) ? "'$value'" : get_debug_type($value);
     }
 
     private static function error(string $message): WorktreeException

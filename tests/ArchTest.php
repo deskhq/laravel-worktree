@@ -14,6 +14,7 @@ arch('the host binary never reaches for Laravel')
         'DeskHQ\LaravelWorktree\Console',
         'DeskHQ\LaravelWorktree\Git',
         'DeskHQ\LaravelWorktree\Process',
+        'DeskHQ\LaravelWorktree\Registry',
         'DeskHQ\LaravelWorktree\Support',
     ])
     ->not->toUse('Illuminate');

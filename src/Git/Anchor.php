@@ -45,7 +45,7 @@ final readonly class Anchor
         $resolved = realpath(str_starts_with($path, '/') ? $path : $workingDirectory.'/'.$path);
 
         if ($resolved === false) {
-            throw new WorktreeException("the git directory ({$path}) does not exist");
+            throw new WorktreeException("the git directory ($path) does not exist");
         }
 
         return new self($resolved, dirname($resolved));

@@ -78,6 +78,30 @@ The binary reads that file **on the host, with no application booted** — it ru
 
 So `config/worktree.php` may use `env()`, and may not reference application classes, container bindings or facades. A test enforces it: the config is loaded in a process where none of them exist.
 
+## Slots, ports and the registry
+
+Every worktree holds a slot, and a slot owns a block of host ports. Slots are handed out by a **machine-global** registry — `~/.laravel-worktree/registry.json`, moved with `WORKTREE_HOME` — keyed by Compose project name, with each entry recording the checkout it belongs to:
+
+```json
+{
+  "wt-the-desk-441":       {"slot": 0, "repo": "/Users/…/the-desk", "ports": {"app": 20000, "…": 0}},
+  "wt-shop-feat-checkout": {"slot": 1, "repo": "/Users/…/shop",     "ports": {"app": 20010, "…": 0}}
+}
+```
+
+Machine-global rather than per-repository because host ports are: a per-repo registry gives two clones of the same repository slot 0 each, the same port block, and `Bind for :::20000 failed` on the second — and having two clones is exactly what a worktree tool encourages. Because every entry names its repository, `list` still shows one checkout's worktrees by default.
+
+Before a slot is claimed, every port in its block is bind-probed, and a slot something already holds is skipped with a line naming the port. That also catches port users the registry cannot know about — a stray Postgres, a crashed container still holding a binding. It is a strong pre-flight hint, not a guarantee: Compose binds those ports minutes later, so this is deliberately TOCTOU.
+
+Two `mkdir`-based locks — `flock` is absent on macOS — keep concurrent runs honest:
+
+- the **registry lock** guards the free-slot search plus the claim that follows it, so two different worktrees never take the same slot. Held for milliseconds, and released before any of the slow work, so one repository's `composer install` never blocks another's allocation.
+- a **per-worktree lock** serialises the whole create or remove of one worktree, so a second `create 441` waits for the first and then re-enters it rather than running git, Composer, Sail and npm alongside it in the same directory. Different worktrees take different locks.
+
+A lock is only ever released by the process holding it, and both are released by the same shutdown handler — so an interrupted bootstrap (`130`) leaves nothing behind for the next run to trip over, while keeping its registry entry so that next run resumes the same slot.
+
+Resuming tolerates entries written by an earlier version of this package: a port the current configuration declares and the entry does not is derived from the slot, not treated as corruption. The ports an entry *does* record win over the ones the slot would derive, because those are what its containers were published on.
+
 ## Testing
 
 ```bash
