@@ -43,13 +43,14 @@ it('reports the containerised refusal for every command', function (string $comm
  * A command the roadmap has not built yet, deliberately: this asserts that the
  * facade reaches the binary and hands back what it said, and `create` reaching
  * it would build a worktree of this repository on the machine running the suite
- * — while `list` would read the developer's own registry.
+ * — while `list` would read the developer's own registry, and `remove` would
+ * tear down whatever it found there.
  */
 it('delegates to the host binary when it is on the host', function () {
     pretendToBeContainerised(false);
 
-    $this->artisan('worktree:remove')
-        ->expectsOutputToContain('remove is not implemented yet')
+    $this->artisan('worktree:reap')
+        ->expectsOutputToContain('reap is not implemented yet')
         ->assertExitCode(1);
 });
 

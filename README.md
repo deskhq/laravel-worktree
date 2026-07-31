@@ -44,7 +44,7 @@ worktree must run on the host, not inside the container.
 Use:  ./vendor/bin/worktree create 441
 ```
 
-`remove` and `reap` are not implemented yet; each one lands with its own issue.
+`reap` is not implemented yet; it lands with its own issue.
 
 ## Creating, resuming and re-entering
 
@@ -132,6 +132,46 @@ A worktree torn down by hand, a teardown interrupted partway, or a registry file
 Which is what makes `reap` discoverable at the moment it is relevant, rather than after the disk fills. It is on stderr because the table is a contract: a diagnostic printed between rows would be read as a row, and `worktree list | wc -l` would count it.
 
 The scan is the one `reap` destroys by — a warning about something `reap` would not touch teaches people to ignore the warning, and the reverse is worse. So it is scoped identically: the `wt-` marker, narrowed to this repository unless `--all`, minus everything the registry claims from any checkout. It is silent when there is nothing to say, and silent when there is no daemon to ask: with nothing answering, a clean bill of health would be inferred rather than established.
+
+## Removing
+
+```bash
+worktree remove <slug>
+```
+
+Containers, volumes, the worktree directory and the slot. **The branch stays** — the work is the point and the infrastructure is disposable, so `git worktree remove` runs with `--force` and nothing in this command touches a ref. Nothing reaches stdout either: there is no answer for a script to read, only an exit code.
+
+The order, and every position in it is load-bearing:
+
+1. the per-worktree lock, taken before the registry is read and held until the process exits, so a concurrent `create` for the same key waits instead of slotting a replacement entry in behind the teardown
+2. the [teardown](#teardown-and-why-it-proves-rather-than-trusts), which proves rather than trusts
+3. `git worktree remove --force`, tolerating a path git will not remove
+4. `git worktree prune`, or the next `git worktree add` is refused the path as *missing but already registered*
+5. the registry entry deleted
+6. **exit non-zero if the teardown left anything behind**, naming it and naming `reap`
+
+Step 6 is the point. The git side has genuinely finished either way, so the slot really is free; what failed is the disk, and both halves are said separately because an operator acts on each:
+
+```
+error: wt-the-desk-441-fix-login survived teardown: 1 volume (wt-the-desk-441-fix-login_sail-pgsql) could not be removed
+wt-the-desk-441-fix-login is out of the registry and its slot is free — the git side finished — but its containers and volumes are not accounted for; 'worktree reap' is the way back to them
+```
+
+The same exit code covers the daemon that could not be asked at all, because an unreachable daemon proves nothing about what is on its disk.
+
+Freeing the slot while staying silent about surviving volumes is exactly the bug this replaces: the version before it logged *"compose teardown reported nothing to remove (already down?)"* on any non-zero exit and deleted the entry anyway (the-desk#1095).
+
+### It works with no registry entry
+
+The registry is a convenience, not the source of truth, and both facts a teardown needs are derivable from the name: the Compose project is `wt-<repo-slug>-<slug>`, and the worktree is a directory named after the slug beside the checkout. So a key nothing holds is a line on stderr rather than a refusal:
+
+```
+nothing in the registry holds wt-the-desk-441-fix-login, so this run goes by the name it was given: the project wt-the-desk-441-fix-login, and the worktree at /Users/…/the-desk-worktrees/441-fix-login
+```
+
+Refusing was the bug it fixes: a worktree somebody removed by hand — or one whose entry a *failed* teardown had already deleted — had no supported way to reclaim its volumes at all. Where the derived directory is not there, the sibling `*-worktrees` directories are globbed for one holding that slug, which is what a `repo_slug` set since the worktree was created leaves behind; a match is believed only once git confirms it is a worktree of *this* repository, because two checkouts side by side have sibling directories that look identical from the filesystem alone.
+
+An entry another checkout holds is refused rather than destroyed — a key is a Compose project name, so removing it from here would tear down that checkout's containers.
 
 ## Configuration
 
