@@ -70,6 +70,26 @@ final readonly class ProcessRunner
     }
 
     /**
+     * Run a command whose failure is an answer rather than an event,
+     * discarding both of its streams.
+     *
+     * One caller: the pre-resolution fetch of a base branch, tried against
+     * every remote and expected to fail on most of them. `couldn't find remote
+     * ref epic` is not a diagnostic when the branch is local-only — it is the
+     * question being answered, and printing it would teach people to ignore
+     * git's failures in a run where one of them does matter.
+     *
+     * @param  list<string>  $command
+     */
+    public function quiet(array $command, ?string $cwd = null): int
+    {
+        $process = $this->process($command, $cwd);
+        $process->disableOutput();
+
+        return $process->run();
+    }
+
+    /**
      * Run a command as a transparent pipe, with both streams explicitly sunk by
      * the caller.
      *

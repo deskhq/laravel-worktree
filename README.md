@@ -102,6 +102,28 @@ A lock is only ever released by the process holding it, and both are released by
 
 Resuming tolerates entries written by an earlier version of this package: a port the current configuration declares and the entry does not is derived from the slot, not treated as corruption. The ports an entry *does* record win over the ones the slot would derive, because those are what its containers were published on.
 
+## What a worktree forks from
+
+Everything anchors to the **main** working tree first — `dirname(git rev-parse --git-common-dir)` — so the binary behaves identically whether you run it from the main checkout or from inside one of the worktrees it created.
+
+The base is then resolved to a ref git cannot second-guess, because `git worktree add -b <new> <path> <base>` **DWIMs**: when `<base>` matches no local branch and exactly one remote-tracking branch, git creates a local `<base>` tracking the remote and checks *that* out, silently dropping `-b`. The worktree ends up on the shared release line and every commit made in it lands there. Resolution order:
+
+1. `HEAD` and `@` resolve locally, and are used as-is — `refs/remotes/*/HEAD` exists in any clone, so a remote lookup would redirect them onto `origin/HEAD`.
+2. `<base>` is fetched from every remote. Failures — offline, no such branch there — are non-fatal; resolution falls back to the refs already in the clone.
+3. Exactly one `refs/remotes/*/<base>` wins, **including over a local branch of the same name**: a local `develop` that is merely behind origin forks the worktree from a stale baseline, and that surfaces later as a conflict or a missing commit rather than as an error.
+4. Several remotes carry it → a refusal naming the candidates. Ambiguity is not guessed.
+5. Otherwise anything `rev-parse` resolves to a commit — a tag, a SHA, an already-qualified `origin/develop`, or a local-only branch — else a refusal suggesting a fetch.
+
+With no base given, `base_branch` / `WORKTREE_BASE` decides, and with those unset the repository's own default branch does (`refs/remotes/origin/HEAD`, falling back to the branch you are on).
+
+Then, whatever git was asked to do, `HEAD` is re-read in the new worktree and the run is abandoned unless it is on the expected branch:
+
+```
+error: worktree /Users/…/441-fix-login is on 'develop', expected '441-fix-login' — refusing to continue, commits would land on the wrong branch
+```
+
+One `rev-parse`, and it runs on re-entry too — so a worktree someone switched branches in by hand is caught before a single bootstrap step touches it.
+
 ## Testing
 
 ```bash
