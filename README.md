@@ -1,19 +1,11 @@
 # Per-worktree isolation so multiple agents can work on a Laravel project concurrently
 
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/deskhq/laravel-worktree.svg?style=flat-square)](https://packagist.org/packages/deskhq/laravel-worktree)
-[![GitHub Tests Action Status](https://github.com/spatie/package-laravel-worktree-laravel/actions/workflows/run-tests.yml/badge.svg)](https://github.com/deskhq/laravel-worktree/actions?query=workflow%3Arun-tests+branch%3Amain)
-[![GitHub Code Style Action Status](https://github.com/spatie/package-laravel-worktree-laravel/actions/workflows/fix-php-code-style-issues.yml/badge.svg)](https://github.com/deskhq/laravel-worktree/actions?query=workflow%3A"Fix+PHP+code+style+issues"+branch%3Amain)
+[![GitHub Tests Action Status](https://github.com/deskhq/laravel-worktree/actions/workflows/run-tests.yml/badge.svg)](https://github.com/deskhq/laravel-worktree/actions?query=workflow%3Arun-tests+branch%3Amain)
+[![GitHub Code Style Action Status](https://github.com/deskhq/laravel-worktree/actions/workflows/fix-php-code-style-issues.yml/badge.svg)](https://github.com/deskhq/laravel-worktree/actions?query=workflow%3A"Fix+PHP+code+style+issues"+branch%3Amain)
 [![Total Downloads](https://img.shields.io/packagist/dt/deskhq/laravel-worktree.svg?style=flat-square)](https://packagist.org/packages/deskhq/laravel-worktree)
 
-This is where your description should go. Limit it to a paragraph or two. Consider adding a small example.
-
-## Support us
-
-[<img src="https://github-ads.s3.eu-central-1.amazonaws.com/laravel-worktree.jpg?t=1" width="419px" />](https://spatie.be/github-ad-click/laravel-worktree)
-
-We invest a lot of resources into creating [best in class open source packages](https://spatie.be/open-source). You can support us by [buying one of our paid products](https://spatie.be/open-source/support-us).
-
-We highly appreciate you sending us a postcard from your hometown, mentioning which of our package(s) you are using. You'll find our address on [our contact page](https://spatie.be/about-us). We publish all received postcards on [our virtual postcard wall](https://spatie.be/open-source/postcards).
+Give every git worktree of a Laravel project its own ports, containers and environment, so several agents can work on the same repository at the same time without fighting over the machine.
 
 ## Installation
 
@@ -23,38 +15,21 @@ You can install the package via composer:
 composer require deskhq/laravel-worktree
 ```
 
-You can publish and run the migrations with:
-
-```bash
-php artisan vendor:publish --tag="laravel-worktree-migrations"
-php artisan migrate
-```
+This installs the host binary at `vendor/bin/worktree`.
 
 You can publish the config file with:
 
 ```bash
-php artisan vendor:publish --tag="laravel-worktree-config"
-```
-
-This is the contents of the published config file:
-
-```php
-return [
-];
-```
-
-Optionally, you can publish the views using
-
-```bash
-php artisan vendor:publish --tag="laravel-worktree-views"
+php artisan vendor:publish --tag="worktree-config"
 ```
 
 ## Usage
 
-```php
-$laravelWorktree = new DeskHQ\LaravelWorktree();
-echo $laravelWorktree->echoPhrase('Hello, DeskHQ!');
+```bash
+./vendor/bin/worktree
 ```
+
+The commands are not implemented yet.
 
 ## Testing
 
