@@ -101,6 +101,21 @@ final readonly class Allocator
     }
 
     /**
+     * Write an entry back as the run that owns it now has it — the degraded
+     * steps a bootstrap just left behind.
+     *
+     * The slot is not in question here, so this takes only the registry lock,
+     * and only for the read-modify-write: the caller is holding the worktree's
+     * own lock already, and has been since before it read the entry.
+     */
+    public function record(Entry $entry): void
+    {
+        $this->locks->registry()->hold(function () use ($entry): void {
+            $this->registry->put($entry);
+        });
+    }
+
+    /**
      * Give a slot back.
      *
      * Under the same worktree lock a create takes, so a `remove` racing a

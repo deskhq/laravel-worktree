@@ -44,7 +44,53 @@ worktree must run on the host, not inside the container.
 Use:  ./vendor/bin/worktree create 441
 ```
 
-The commands themselves are not implemented yet; each one lands with its own issue.
+`list`, `remove` and `reap` are not implemented yet; each one lands with its own issue.
+
+## Creating, resuming and re-entering
+
+```bash
+worktree create <slug> [base] [--refresh] [--json]
+```
+
+`create` prints the worktree's **absolute path**, alone, on stdout — that is the whole of what a caller has to parse:
+
+```bash
+cd "$(./vendor/bin/worktree create 441)"
+```
+
+`--json` emits the worktree's registry entry instead, on one line:
+
+```json
+{"project":"wt-the-desk-441-fix-login","slot":0,"repo":"/Users/…/the-desk","slug":"441-fix-login","branch":"441-fix-login","path":"/Users/…/the-desk-worktrees/441-fix-login","ports":{"app":20000,"vite":20001,"reverb":20002,"db":20003,"redis":20004},"created_at":"2026-07-30T22:04:11Z","degraded":[]}
+```
+
+That is also why there is no MCP server: an agent that can run a process can already read this.
+
+### Three entry states
+
+| The worktree is | What `create` does |
+| --- | --- |
+| **ready** — it has a `.worktree-ready` | Short-circuits: re-reads `HEAD`, retries whatever is recorded as degraded, prints the path. A healthy one makes no Docker call at all. |
+| **registered but not ready** — a run was interrupted | Resumes on the *same* slot and the *same* path. The recipe runs again from the top, and step sentinels make what already finished cheap to skip. |
+| **unregistered** | Allocates a slot, claims it, bootstraps. |
+
+`--refresh` turns the first into the second, so a changed `config/worktree.php` takes effect on a worktree that is already ready. It does not delete step sentinels: a `sentinel` means "done once, and never again", and dropping them would re-run `migrate:fresh --seed` over real data.
+
+A registry entry whose directory somebody has deleted by hand is none of the three — it is forgotten and made again, with a line saying so. Git's own record of that worktree is cleared first, or `git worktree add` would refuse the path as *missing but already registered*; the branch is untouched, so nothing committed in there is lost.
+
+### The order, and what holds a lock
+
+1. the per-worktree lock
+2. the entry: resumed, or a slot allocated under the registry lock and released immediately after
+3. `git worktree add`, and `HEAD` verified
+4. the `.env` — only if the worktree has none
+5. the Compose overlay — regenerated every run, because ports may have moved
+6. the runtime boots
+7. the step pipeline
+8. `.worktree-ready`
+9. the path on stdout, and then any degrade notices on stderr
+
+The per-worktree lock is taken before anything is read and held until the process exits, so a stray second `create 441` waits and then re-enters rather than racing the first through git, Composer, Sail and npm in one directory. The registry lock covers the free-slot search and the claim that follows it and nothing else — held across a five-minute bootstrap, it would serialise every unrelated worktree on the machine.
 
 ## Configuration
 

@@ -36,11 +36,11 @@ it('rejects an unknown command as a usage error', function () {
 });
 
 it('names the commands the roadmap has not built yet, rather than denying them', function () {
-    $process = worktree(['create', '441']);
+    $process = worktree(['list']);
 
     expect($process->getExitCode())->toBe(1)
         ->and($process->getOutput())->toBe('')
-        ->and($process->getErrorOutput())->toContain('error: create is not implemented yet');
+        ->and($process->getErrorOutput())->toContain('error: list is not implemented yet');
 });
 
 it('refuses to run inside the container and creates nothing', function () {

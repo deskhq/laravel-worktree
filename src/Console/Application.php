@@ -3,6 +3,7 @@
 namespace DeskHQ\LaravelWorktree\Console;
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
+use DeskHQ\LaravelWorktree\Exceptions\UsageException;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
@@ -37,16 +38,13 @@ final class Application
     public static function create(): self
     {
         $output = new Output(STDERR);
+        $shutdown = new ShutdownHandler($output);
+        $runner = new ProcessRunner($output);
 
-        $application = new self(
-            $output,
-            new ShutdownHandler($output),
-            new ProcessRunner($output),
-            new ContainerEnvironment,
-        );
+        $application = new self($output, $shutdown, $runner, new ContainerEnvironment);
 
         return $application
-            ->register(new UnimplementedCommand('create', '<slug> [base]', 'Create (or re-enter) an isolated worktree; prints its absolute path.', $output))
+            ->register(new CreateCommand($output, new Emitter, $runner, $shutdown))
             ->register(new UnimplementedCommand('list', '', 'Show this repository\'s worktrees, slots and ports.', $output))
             ->register(new UnimplementedCommand('remove', '<slug>', 'Tear down a worktree\'s containers and volumes, and free its slot.', $output))
             ->register(new UnimplementedCommand('reap', '', 'Remove stray worktree projects left on this machine.', $output));
@@ -100,6 +98,13 @@ final class Application
             $anchor = Anchor::resolve($this->runner, $this->workingDirectory());
 
             return $command->run($arguments, $anchor, Configuration::load($anchor->mainRoot));
+        } catch (UsageException $e) {
+            // Called wrong rather than failed, so `EX_USAGE` and the one line
+            // of usage that answers it — the whole usage text would bury it.
+            $this->output->error($e->getMessage());
+            $this->output->line('usage: worktree '.trim($name.' '.$command->usage()[0]));
+
+            return ExitCode::Usage;
         } catch (WorktreeException $e) {
             $this->output->error($e->getMessage());
 

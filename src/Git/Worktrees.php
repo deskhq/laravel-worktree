@@ -58,6 +58,8 @@ final readonly class Worktrees
 
     private function create(string $path, string $branch, ?string $base): void
     {
+        $this->prune($path);
+
         if ($this->hasBranch($branch)) {
             $this->output->line("attaching existing branch $branch");
 
@@ -71,6 +73,58 @@ final readonly class Worktrees
         $this->output->line("creating branch $branch from $ref");
 
         $this->add(['worktree', 'add', '-b', $branch, $path, $ref], $path);
+    }
+
+    /**
+     * Clear git's own record of a worktree at $path whose directory has gone.
+     *
+     * Deleting a worktree directory by hand leaves that record behind, and
+     * `git worktree add` then refuses the path — "missing but already
+     * registered" — which is a run failing on the state a person creates by
+     * tidying up. Pruning clears it, and the branch is untouched, so nothing
+     * committed in there is lost.
+     *
+     * Asked of git before it is done, and only for this path, because `prune`
+     * itself is repository-wide: a second `create` for a *different* worktree
+     * is a few milliseconds inside `git worktree add` where its own record
+     * exists and its directory does not, and pruning on every create would
+     * eventually land in that window.
+     */
+    private function prune(string $path): void
+    {
+        if (! $this->isPrunable($path)) {
+            return;
+        }
+
+        $this->output->line("git still has a worktree registered at $path, but there is nothing there; clearing that record");
+
+        $this->runner->quiet(['git', 'worktree', 'prune'], $this->anchor->mainRoot);
+    }
+
+    /**
+     * Whether git holds a record for $path that it considers prunable — the
+     * one state this recovers from, named by git itself rather than guessed at
+     * from the filesystem.
+     */
+    private function isPrunable(string $path): bool
+    {
+        $result = $this->runner->capture(['git', 'worktree', 'list', '--porcelain'], $this->anchor->mainRoot);
+
+        if (! $result->succeeded()) {
+            return false;
+        }
+
+        foreach (explode("\n\n", trim($result->output)) as $record) {
+            $lines = array_map(trim(...), explode("\n", trim($record)));
+
+            if (! in_array('worktree '.$path, $lines, true)) {
+                continue;
+            }
+
+            return array_filter($lines, fn (string $line): bool => str_starts_with($line, 'prunable')) !== [];
+        }
+
+        return false;
     }
 
     private function hasBranch(string $branch): bool
