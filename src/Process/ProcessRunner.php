@@ -182,6 +182,34 @@ final readonly class ProcessRunner
     }
 
     /**
+     * Run a command over $input and keep what it made of it.
+     *
+     * One caller: the table `list` aligns through `column`, which is a filter —
+     * text in on stdin, text out on stdout, both of them values here rather than
+     * this process's streams. Its stderr is dropped rather than shown for the
+     * reason {@see consult()} drops `gh`'s: `column: command not found` is the
+     * question being answered, not a diagnostic, and the caller has a table to
+     * print either way.
+     *
+     * @param  list<string>  $command
+     */
+    public function filter(array $command, string $input): ProcessResult
+    {
+        $process = $this->process($command, null);
+        $process->setInput($input);
+
+        $captured = '';
+
+        $exitCode = $process->run(function (string $type, string $chunk) use (&$captured): void {
+            if ($type === Process::OUT) {
+                $captured .= $chunk;
+            }
+        });
+
+        return new ProcessResult($exitCode, $captured);
+    }
+
+    /**
      * Run a command as a transparent pipe, with both streams explicitly sunk by
      * the caller.
      *

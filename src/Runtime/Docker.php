@@ -124,6 +124,31 @@ final class Docker
     }
 
     /**
+     * How many containers each Compose project on this machine has.
+     *
+     * The other direction from {@see containers()}: that asks what one project
+     * owns, this asks what projects exist at all, which is the only way to find
+     * a project no registry entry names any more ({@see Orphans}). One query
+     * either way — the label is printed per resource and counted here.
+     *
+     * @return array<string, int>
+     */
+    public function containersByProject(): array
+    {
+        return $this->tally([$this->binary, 'ps', '-a', '--filter', 'label='.self::ProjectLabel, '--format', self::labelTemplate()]);
+    }
+
+    /**
+     * How many volumes each Compose project on this machine has.
+     *
+     * @return array<string, int>
+     */
+    public function volumesByProject(): array
+    {
+        return $this->tally([$this->binary, 'volume', 'ls', '--filter', 'label='.self::ProjectLabel, '--format', self::labelTemplate()]);
+    }
+
+    /**
      * Remove one container, and the anonymous volumes it mounts.
      *
      * `--volumes` is the only route to those: nothing names them, so nothing
@@ -201,6 +226,34 @@ final class Docker
         $this->output->line("warning: could not remove $what: ".trim($result->output));
 
         return false;
+    }
+
+    /**
+     * A label query that answers with one project name per resource, counted.
+     *
+     * @param  list<string>  $command
+     * @return array<string, int>
+     */
+    private function tally(array $command): array
+    {
+        $counts = [];
+
+        foreach ($this->query($command) as $project) {
+            $counts[$project] = ($counts[$project] ?? 0) + 1;
+        }
+
+        ksort($counts);
+
+        return $counts;
+    }
+
+    /**
+     * The Go template that prints one resource's project label, which both
+     * `docker ps` and `docker volume ls` understand.
+     */
+    private static function labelTemplate(): string
+    {
+        return '{{.Label "'.self::ProjectLabel.'"}}';
     }
 
     /**
