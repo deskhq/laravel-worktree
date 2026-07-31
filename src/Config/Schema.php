@@ -58,8 +58,14 @@ final readonly class Schema
     /** @var list<string> */
     public const array ComposeKeys = ['keep_services', 'port_overrides'];
 
-    /** @var list<string> */
-    private const array Conditions = ['missing', 'exists', 'env_empty'];
+    /**
+     * The three questions `when` may ask. Public because {@see Condition} is
+     * what answers them, and a vocabulary validated in one place and
+     * interpreted in another is a vocabulary that drifts.
+     *
+     * @var list<string>
+     */
+    public const array Conditions = ['missing', 'exists', 'env_empty'];
 
     /**
      * Validate a raw config array and fill in everything it left out.
@@ -332,6 +338,14 @@ final readonly class Schema
                     ? $entry
                     : throw self::error("$where.$key must be a non-empty string, ".self::describe($entry).' given'),
             };
+        }
+
+        // `degrade` is what makes `allow_failure` honest — the notice a skipped
+        // step announces itself with at the end of the run. On a step that
+        // aborts the bootstrap it is never reached, so the message would be
+        // written, read as covered, and never printed by anything.
+        if (isset($validated['degrade']) && ($validated['allow_failure'] ?? false) !== true) {
+            throw self::error("$where.degrade is only printed for a step that was allowed to fail; add 'allow_failure' => true, or drop the message");
         }
 
         return $validated;

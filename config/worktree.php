@@ -209,9 +209,66 @@ return [
     |     'allow_failure' => a failure does not abort the bootstrap
     |     'degrade'       => re-printed at the very end when this step failed
     |
-    | Anything the DSL cannot say — a restore that must run even on failure, a
-    | decision made from another command's exit code — belongs in a script the
-    | application owns, invoked as a single `host` step.
+    | Every string takes the {{path}}, {{slug}}, {{project}}, {{branch}},
+    | {{uid}}, {{gid}} and {{port.*}} placeholders, and the whole recipe is
+    | resolved before the first step starts — a typo in the last step is an
+    | error now, not after eleven minutes of Composer and npm.
+    |
+    |     'steps' => [
+    |         ['label' => 'Installing PHP dependencies',
+    |          'sail'  => 'composer install',
+    |          'sentinel' => '.worktree-installed'],
+    |
+    |         ['label' => 'Generating the application key',
+    |          'sail'  => 'artisan key:generate --force',
+    |          'when'  => 'env_empty:APP_KEY'],
+    |
+    |         ['label' => 'Installing node modules',
+    |          'host'  => 'npm ci',
+    |          'when'  => 'missing:node_modules'],
+    |     ],
+    |
+    | A `sentinel` says "done once, never again"; a `when` says "needed right
+    | now". `npm ci` wants the second: it is worth running again whenever
+    | node_modules has been thrown away.
+    |
+    | ## Seeding is a branch, not a skip
+    |
+    | Two ordered steps, not one guarded step:
+    |
+    |     ['sail' => 'artisan migrate:fresh --seed --force', 'sentinel' => '.worktree-seeded'],
+    |     ['sail' => 'artisan migrate --force', 'when' => 'exists:.worktree-seeded'],
+    |
+    | The first drops the schema *because* the sentinel is missing: no seed has
+    | ever finished against those tables, so a half-finished one's leftover rows
+    | — the source of `duplicate key value violates unique constraint` on the
+    | retry — are safe to discard. Once the sentinel is there, the data is real
+    | and only new migrations run.
+    |
+    | ## The APP_KEY gate is env_empty, not "missing"
+    |
+    | A freshly copied `.env` carries `APP_KEY=`: the key is present, and blank.
+    | A condition that only fired on an absent variable would never fire.
+    |
+    | ## What belongs in a script instead
+    |
+    | Two things the DSL deliberately cannot say. A restore that has to run even
+    | when the thing it brackets failed — parking a container's third-party apt
+    | sources around an install, say — because `allow_failure` means "ignore
+    | this failure", not "run this regardless". And a decision made by reading
+    | another command's exit code, which no `when` can ask.
+    |
+    | Both belong in a script the application owns, invoked as one step:
+    |
+    |     ['host' => 'bin/worktree-playwright {{path}}',
+    |      'allow_failure' => true,
+    |      'degrade' => 'Playwright is not fully installed; tests/Browser will not run here'],
+    |
+    | `allow_failure` lets the bootstrap finish without that step; `degrade` is
+    | what makes that honest, by re-printing the message as the last thing on
+    | screen instead of leaving it four minutes back in the asset build. A
+    | degraded step is recorded in the registry, and re-entering the worktree
+    | retries it — and only it.
     |
     */
 

@@ -141,7 +141,7 @@ it('names the placeholder it cannot resolve', function (array $variables, string
     ],
     'a name that is not a placeholder' => [
         ['APP_URL' => 'http://localhost:{{prot.app}}'],
-        'env.APP_URL uses {{prot.app}}, which is not a placeholder; the ones there are {{project}}, {{slug}}, {{branch}}, {{path}} and {{port.<name>}}',
+        'env.APP_URL uses {{prot.app}}, which is not a placeholder; the ones there are {{project}}, {{slug}}, {{branch}}, {{path}}, {{uid}}, {{gid}} and {{port.<name>}}',
     ],
 ]);
 

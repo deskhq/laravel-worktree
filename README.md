@@ -272,6 +272,82 @@ Note the sharp edge in it: passing any `-f` disables Compose's own file discover
 
 The generated file is added to the repository's `.git/info/exclude`, unless a published `.gitignore` already covers it, so a worktree with an overlay still has a clean `git status`.
 
+## The bootstrap
+
+The recipe is `steps` in `config/worktree.php`, run in the order it is declared. This is the mechanism that keeps one application's bootstrap out of this package: `composer install`, `artisan migrate`, `npm run build`, the generated TypeScript and the browser binaries are all configuration, and none of them is a class in here.
+
+```php
+'steps' => [
+    ['label' => 'Installing PHP dependencies',
+     'sail'  => 'composer install',
+     'sentinel' => '.worktree-installed'],
+
+    ['label' => 'Generating the application key',
+     'sail'  => 'artisan key:generate --force',
+     'when'  => 'env_empty:APP_KEY'],
+
+    ['label' => 'Installing node modules',
+     'host'  => 'npm ci',
+     'when'  => 'missing:node_modules'],
+],
+```
+
+| Key | Meaning |
+| --- | --- |
+| `host` | run on the host, with the worktree as the working directory |
+| `sail` | run in the container, through the worktree's own `./vendor/bin/sail` |
+| `sail_root` | run in the container as root, through `sail root-shell -c` |
+| `label` | the progress line; without one, a step is named by its command |
+| `sentinel` | skip if this file exists in the worktree; touch it on success |
+| `when` | `missing:<path>`, `exists:<path>` or `env_empty:<KEY>` |
+| `allow_failure` | a failure does not abort the bootstrap |
+| `degrade` | re-printed at the very end when this step failed |
+
+Every string takes the `{{path}}`, `{{slug}}`, `{{project}}`, `{{branch}}`, `{{uid}}`, `{{gid}}` and `{{port.*}}` placeholders, and the **whole recipe is resolved before the first step starts** — a typo in the last step is an error now, not after eleven minutes of Composer and npm.
+
+The host/container split is not a nicety. `mkdir -p resources/js/generated` and a throwaway `docker run … composer install` are host commands, `artisan migrate` is not, and any real recipe has both.
+
+A `sentinel` says "done once, never again"; a `when` says "needed right now". `npm ci` wants the second — it is worth re-running whenever `node_modules` has been thrown away. A sentinel is only touched when its step succeeded, and it is excluded from git like every other file this package writes.
+
+### Seeding is a branch, not a skip
+
+```php
+['sail' => 'artisan migrate:fresh --seed --force', 'sentinel' => '.worktree-seeded'],
+['sail' => 'artisan migrate --force', 'when' => 'exists:.worktree-seeded'],
+```
+
+The first drops the schema *because* the sentinel is missing: no seed has ever finished against those tables, so a half-finished one's leftover rows — the source of `duplicate key value violates unique constraint` on the retry — are safe to discard. Once the sentinel is there the data is real, and only new migrations run.
+
+`env_empty`, meanwhile, is not `env_missing`: a freshly copied `.env` carries `APP_KEY=`, so the key is present and blank, and a condition that only fired on an absent variable would never fire at all.
+
+### Degrading, and the retry that follows
+
+`allow_failure` lets the bootstrap finish without a step. `degrade` is what makes that honest — the notice is held back and printed as the **last** thing on screen, after the path, instead of scrolling away behind four minutes of asset building:
+
+```
+One step did not complete, and the bootstrap carried on without it:
+  - Playwright is not fully installed; tests/Browser will not run here
+Re-entering this worktree retries just those; nothing else runs again.
+```
+
+Degraded steps are recorded in the worktree's registry entry, and re-entering the worktree runs those and only those — a step usually degrades because a registry was unreachable or a download timed out, and the next run is the natural moment to try again. A step that failed *without* `allow_failure` stops the bootstrap where it stands, names its exit code, and leaves the worktree resumable.
+
+### Where the DSL stops
+
+Two things it deliberately cannot say.
+
+**Finally-semantics.** A restore that must run even when the thing it brackets failed — parking a container's third-party apt sources around an install, say. `allow_failure` means "ignore this failure", not "run this regardless".
+
+**Probe-gating.** A decision made by reading another command's exit code, such as whether Chromium is already installed where `PLAYWRIGHT_BROWSERS_PATH` puts it. No `sentinel` can ask that.
+
+Both are exotic, and covering them would mean adding `always:` and `when: shell_fails:<cmd>` — inventing a worse programming language, then documenting and testing it. So the escape hatch is a script the application owns, invoked as one ordinary step:
+
+```php
+['host' => 'bin/worktree-playwright {{path}}',
+ 'allow_failure' => true,
+ 'degrade' => 'Playwright is not fully installed; tests/Browser will not run here'],
+```
+
 ## Testing
 
 ```bash

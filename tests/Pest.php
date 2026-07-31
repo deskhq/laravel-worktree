@@ -205,6 +205,15 @@ function runGit(string $cwd, string ...$arguments): Process
 }
 
 /**
+ * Whether git itself considers $file ignored inside the worktree at $path —
+ * which is the only thing an exclude is for.
+ */
+function ignoredInGit(string $path, string $file): bool
+{
+    return (new Process(['git', 'check-ignore', '--quiet', '--', $file], $path))->run() === 0;
+}
+
+/**
  * The commit $ref points at, so a fork can be asserted by SHA rather than by
  * the branch name that was asked for.
  */

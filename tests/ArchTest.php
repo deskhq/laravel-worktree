@@ -10,6 +10,7 @@ arch('it starts subprocesses through the process runner alone')
 
 arch('the host binary never reaches for Laravel')
     ->expect([
+        'DeskHQ\LaravelWorktree\Bootstrap',
         'DeskHQ\LaravelWorktree\Compose',
         'DeskHQ\LaravelWorktree\Config',
         'DeskHQ\LaravelWorktree\Console',
