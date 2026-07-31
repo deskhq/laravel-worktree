@@ -1,7 +1,19 @@
 name: Fix PHP code style issues
 
+# Everywhere but `main`. Note that the commit this job makes arrives with no
+# checks on it: GitHub does not start a workflow run for a push made with its
+# own `GITHUB_TOKEN`, so a pull request that gets styled here sits waiting on
+# required checks that will never start, until they are re-run by hand or
+# something else is pushed. `composer format` before pushing avoids it entirely.
+#
+# This job commits straight back to the branch it ran
+# on, and once `main` requires a pull request that push is rejected — a red run
+# on every merge, for a commit that could not have landed unstyled anyway,
+# because the branch it came from was styled here first.
 on:
   push:
+    branches-ignore:
+      - main
     paths:
       - '**.php'
 
