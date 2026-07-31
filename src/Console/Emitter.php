@@ -28,4 +28,19 @@ final class Emitter
     {
         fwrite($this->stream, $line."\n");
     }
+
+    /**
+     * Whether a person is reading this stream, rather than a pipe, a `$(…)` or a
+     * CI log.
+     *
+     * Asked because `list` has two renderings and this is what chooses between
+     * them: the tab-separated rows a script parses, or a table fitted to the
+     * window in front of somebody. It lives here for the same reason the writes
+     * do — this is the only class allowed to name stdout, so it is the only one
+     * in a position to answer questions about it.
+     */
+    public function isInteractive(): bool
+    {
+        return stream_isatty($this->stream);
+    }
 }

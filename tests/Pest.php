@@ -171,9 +171,15 @@ function worktree(array $arguments = [], ?string $cwd = null, array $env = [], f
  *
  * @param  list<string>  $arguments
  * @param  array<string, string|false>  $env
+ * @param  bool  $terminal  Give the run a pty, so that what it writes goes to something that is a terminal.
  */
-function startWorktree(array $arguments = [], ?string $cwd = null, array $env = [], float $timeout = 120): Process
-{
+function startWorktree(
+    array $arguments = [],
+    ?string $cwd = null,
+    array $env = [],
+    float $timeout = 120,
+    bool $terminal = false,
+): Process {
     $process = new Process(
         [PHP_BINARY, packagePath('bin/worktree'), ...$arguments],
         $cwd ?? test()->main,
@@ -181,6 +187,7 @@ function startWorktree(array $arguments = [], ?string $cwd = null, array $env = 
     );
 
     $process->setTimeout($timeout);
+    $process->setPty($terminal);
     $process->start();
 
     return $process;
@@ -289,6 +296,39 @@ function startWorktreeRemove(array $arguments = ['feat/checkout']): Process
 function worktreeList(array $arguments = [], array $env = []): Process
 {
     return worktree(['list', ...$arguments], env: $env);
+}
+
+/**
+ * The same run with a terminal on the far side of its stdout, which is the
+ * other of `list`'s two renderings and the only thing that chooses between them.
+ *
+ * The width is passed as `COLUMNS` rather than left to the pty: a terminal a
+ * test allocated is not this process's *controlling* terminal, which is what
+ * `stty size` answers for, so the run would otherwise measure the developer's
+ * own window — or nothing at all, on CI.
+ *
+ * Colour is off unless a case asks for it, so that the cases about the table are
+ * about the table; the ones about colour turn it on and say so.
+ *
+ * @param  list<string>  $arguments
+ * @param  array<string, string|false>  $env
+ */
+function worktreeListInTerminal(array $arguments = [], array $env = [], int $columns = 100, bool $colour = false): Process
+{
+    if (! Process::isPtySupported()) {
+        test()->markTestSkipped('this PHP cannot allocate a pty to put a terminal on the far side of stdout');
+    }
+
+    $process = startWorktree(['list', ...$arguments], env: [
+        'COLUMNS' => (string) $columns,
+        'TERM' => 'xterm-256color',
+        'NO_COLOR' => $colour ? false : '1',
+        ...$env,
+    ], terminal: true);
+
+    $process->wait();
+
+    return $process;
 }
 
 /**

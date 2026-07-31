@@ -139,15 +139,39 @@ The per-worktree lock is taken before anything is read and held until the proces
 worktree list [--all] [--json]
 ```
 
-One row per worktree on stdout, in slot order:
+One row per worktree on stdout, in slot order. Which rendering you get turns on one thing — whether stdout is a terminal — because a person and `awk` want different tables and neither should have to unpick the other's.
+
+**Into a pipe, a `$(…)` or a CI log**, the fields go out tab-separated and nothing else happens to them:
+
+```console
+$ worktree list | awk -F'\t' '{ print $1, $2 }'
+KEY SLOT
+wt-the-desk-441-fix-login 0
+wt-the-desk-feat-search 1
+```
+
+Every field in full: the key, the branch, the absolute path. No `column`, no subprocess, no alignment — which is what makes the promise above literally true. It was not, while the tabs were being handed to `column -t`: that pads with spaces and emits none of them, so `awk -F'\t'` saw one field per line on every machine that has `column`, which is all of them.
+
+**In a terminal**, the same rows are fitted to the window:
 
 ```
-KEY                      SLOT  APP    VITE   REVERB  DB     REDIS  BRANCH         PATH
-wt-the-desk-441-fix-log  0     20000  20001  20002   20003  20004  441-fix-login  /Users/…/the-desk-worktrees/441-fix-login
-wt-the-desk-feat-search  1     20010  20011  20012   20013  20014  feat/search    /Users/…/the-desk-worktrees/feat-search
+paths under /Users/agent/www/the-desk-worktrees
+KEY                        SLOT  APP    VITE   REVERB  DB     REDIS  PATH
+wt-the-desk-441-fix-login  0     20000  20001  20002   20003  20004  441-fix-login
+wt-the-desk-feat-search    1     20010  20011  20012   20013  20014  feat-search
 ```
 
-The port columns are whatever `ports` names, in the order it names them, so a repository that publishes a `meilisearch` port gets a `MEILISEARCH` column without this command knowing anything about it. Fields go out tab-separated and are aligned by `column -t`; where there is no `column`, the tabs are what you get, and `awk -F'\t'` reads the same fields either way.
+Three things are elided, all of them things the line already says somewhere else:
+
+- **`BRANCH`**, when every key ends with its branch — which it does, since a key is `wt-` plus the repository plus the slug. On a branch an agent named from an issue title, the two together are a hundred columns of one piece of information. A branch that slugified differently, `feat/checkout` against `feat-checkout`, keeps its column.
+- **the leading directories of `PATH`**, which every worktree of a repository shares. The root is named once above the table instead.
+- **whatever still does not fit**, truncated with a `…` rather than wrapped — a continuation line sitting under no header is worse than an elided field, and `--json` is there for the reader who wants everything.
+
+The width comes from `COLUMNS`, then from `stty`, then from 80. The header is dim, and there is no colour at all under [`NO_COLOR`](https://no-color.org), under `TERM=dumb`, or when stdout is not a terminal.
+
+The port columns are whatever `ports` names, in the order it names them, so a repository that publishes a `meilisearch` port gets a `MEILISEARCH` column without this command knowing anything about it — in both renderings, as is `-` for a port an entry does not hold.
+
+`php artisan worktree:list` forwards to the binary over a pipe, so it prints the parseable rendering. The facade is a delegator and passes stdout through untouched; `vendor/bin/worktree list` is what a terminal gets the fitted table from.
 
 It shows the checkout it was run from. `--all` widens it to the machine — which the machine-global registry is what makes meaningful, and which is the fastest way to answer *what is holding port 20012?*, since that port may well belong to a clone in somebody else's terminal.
 
