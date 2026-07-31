@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/deskhq/laravel-worktree/compare/v0.2.0...v0.3.0) (2026-07-31)
+
+
+### Features
+
+* fit list to the terminal it is read in, and make the TSV contract true ([#48](https://github.com/deskhq/laravel-worktree/issues/48)) ([7828efe](https://github.com/deskhq/laravel-worktree/commit/7828efeb4c6d53c4c423802bbfdfa3ca166aadf4))
+
 ## [0.2.0](https://github.com/deskhq/laravel-worktree/compare/v0.1.0...v0.2.0) (2026-07-31)
 
 
