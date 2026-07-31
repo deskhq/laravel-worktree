@@ -49,6 +49,24 @@ it('prints one row per worktree on stdout, in slot order, and nothing else', fun
         ->and($process->getErrorOutput())->toBe('');
 });
 
+/**
+ * `column` formats to a *terminal* width, and there is no terminal on the far
+ * side of `worktree list | …` — so it falls back to 80 columns, and util-linux
+ * before 2.41 answers a table that does not fit by dropping columns off the
+ * end. The `PATH` of a real worktree is the first thing to go.
+ */
+it('keeps every column of a table far wider than a terminal', function () {
+    $slug = 'feat-'.str_repeat('deeply-nested-', 4).'branch';
+
+    registryHolds(['wt-desk-'.$slug => slotEntry(0, $slug)]);
+
+    $columns = columnsOf(worktreeList());
+
+    expect(strlen(rowsOf(worktreeList())[1]))->toBeGreaterThan(80)
+        ->and($columns[0])->toHaveCount(9)
+        ->and($columns[1][8])->toBe($this->root.'/desk-worktrees/'.$slug);
+});
+
 it('takes its port columns from the configuration rather than from a list of its own', function () {
     mkdir($this->main.'/config', 0755, true);
     file_put_contents(
