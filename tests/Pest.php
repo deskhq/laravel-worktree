@@ -1,6 +1,11 @@
 <?php
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
+use DeskHQ\LaravelWorktree\Console\Output;
+use DeskHQ\LaravelWorktree\Git\Anchor;
+use DeskHQ\LaravelWorktree\Git\BaseRefs;
+use DeskHQ\LaravelWorktree\Git\Worktrees;
+use DeskHQ\LaravelWorktree\Process\ProcessRunner;
 use DeskHQ\LaravelWorktree\Tests\TestCase;
 use Symfony\Component\Process\Process;
 
@@ -143,4 +148,93 @@ function temporaryRepository(): string
     }
 
     return $path;
+}
+
+/**
+ * An upstream carrying `master` and `develop`, cloned so that the clone knows
+ * `develop` only as `remotes/origin/develop` — the state that made `create
+ * <slug> develop` land on `develop` itself (the-desk#619).
+ *
+ * `develop` carries a commit `master` does not, so a fork from the wrong base
+ * is detectable by SHA rather than only by branch name; that is what makes the
+ * stale-local-branch case (the-desk#639) assertable at all.
+ *
+ * @return array{0: string, 1: string} the clone, and the directory holding both it and the upstream
+ */
+function temporaryClone(): array
+{
+    $root = temporaryDirectory('worktree-clone');
+
+    mkdir($root.'/upstream', 0755, true);
+
+    runGit($root.'/upstream', 'init', '--quiet', '--initial-branch=master', '.');
+    file_put_contents($root.'/upstream/README.md', "fixture\n");
+    runGit($root.'/upstream', 'add', '-A');
+    runGit($root.'/upstream', 'commit', '--quiet', '-m', 'init');
+    runGit($root.'/upstream', 'checkout', '--quiet', '-b', 'develop');
+    file_put_contents($root.'/upstream/README.md', "fixture on develop\n");
+    runGit($root.'/upstream', 'commit', '--quiet', '-am', 'develop only');
+    runGit($root.'/upstream', 'checkout', '--quiet', 'master');
+
+    runGit($root, 'clone', '--quiet', $root.'/upstream', 'main');
+
+    return [$root.'/main', $root];
+}
+
+/**
+ * A git command a test needs to have worked, with an identity of its own so it
+ * does not depend on the developer's.
+ */
+function runGit(string $cwd, string ...$arguments): Process
+{
+    $process = new Process(['git', '-c', 'user.email=tests@example.com', '-c', 'user.name=Tests', ...$arguments], $cwd);
+    $process->mustRun();
+
+    return $process;
+}
+
+/**
+ * The commit $ref points at, so a fork can be asserted by SHA rather than by
+ * the branch name that was asked for.
+ */
+function gitRevision(string $cwd, string $ref): string
+{
+    return trim(runGit($cwd, 'rev-parse', $ref)->getOutput());
+}
+
+/**
+ * The base-ref resolver anchored at $cwd — the main checkout of a repository,
+ * or any of its worktrees.
+ *
+ * @param  resource|null  $diagnostics  Where the git the layer runs writes; a memory stream by default.
+ */
+function baseRefsIn(string $cwd, $diagnostics = null): BaseRefs
+{
+    $runner = new ProcessRunner(new Output($diagnostics ?? fopen('php://memory', 'w+')));
+
+    return new BaseRefs($runner, Anchor::resolve($runner, $cwd));
+}
+
+/**
+ * @param  resource|null  $diagnostics
+ */
+function worktreesIn(string $cwd, $diagnostics = null): Worktrees
+{
+    $output = new Output($diagnostics ?? fopen('php://memory', 'w+'));
+    $runner = new ProcessRunner($output);
+    $anchor = Anchor::resolve($runner, $cwd);
+
+    return new Worktrees($runner, $output, $anchor, new BaseRefs($runner, $anchor));
+}
+
+/**
+ * Everything a run wrote to its diagnostics.
+ *
+ * @param  resource  $diagnostics
+ */
+function diagnosticsIn($diagnostics): string
+{
+    rewind($diagnostics);
+
+    return (string) stream_get_contents($diagnostics);
 }
