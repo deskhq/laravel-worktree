@@ -34,7 +34,7 @@ final readonly class UnimplementedCommand implements Command
 
     public function run(array $arguments, Anchor $anchor, Configuration $config): int
     {
-        $this->output->error("{$this->name} is not implemented yet");
+        $this->output->error("$this->name is not implemented yet");
 
         return ExitCode::Failure;
     }

@@ -7,7 +7,7 @@
 fwrite(STDOUT, "installing dependencies\n");
 
 for ($i = 0; $i < 500; $i++) {
-    fwrite(STDOUT, "- resolving package {$i}\n");
+    fwrite(STDOUT, "- resolving package $i\n");
 }
 
 fwrite(STDERR, "warning: something took a while\n");
