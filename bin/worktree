@@ -1,0 +1,26 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * Host entry point for deskhq/laravel-worktree.
+ *
+ * This binary runs on the host, outside of any container and without booting
+ * Laravel, because git worktrees, host ports and the sibling worktrees
+ * directory are all unreachable from inside the application container.
+ *
+ * The command implementations land in later issues; for now this stub only
+ * prints its usage.
+ */
+$usage = <<<'USAGE'
+worktree — per-worktree isolation for Laravel projects
+
+Usage:
+  worktree <command> [options]
+
+Commands are not implemented yet.
+
+USAGE;
+
+fwrite(STDERR, $usage);
+
+exit(64);
