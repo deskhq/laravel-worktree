@@ -23,4 +23,23 @@ class LaravelWorktreeServiceProvider extends PackageServiceProvider
                 ReapCommand::class,
             ]);
     }
+
+    /**
+     * Publish the escape-hatch scripts an application owns once it has them.
+     *
+     * These are starting points rather than package internals: published, then
+     * edited. `vendor:publish` copies with the umask's permissions rather than
+     * the source file's, so a published script needs `chmod +x` before a `host`
+     * step can invoke it.
+     */
+    public function packageBooted(): void
+    {
+        if (! $this->app->runningInConsole()) {
+            return;
+        }
+
+        $this->publishes([
+            __DIR__.'/../stubs/worktree-playwright' => base_path('bin/worktree-playwright'),
+        ], 'worktree-stubs');
+    }
 }

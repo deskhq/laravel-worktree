@@ -7,25 +7,72 @@
 
 Give every git worktree of a Laravel project its own ports, containers and environment, so several agents can work on the same repository at the same time without fighting over the machine.
 
-## Installation
+## What actually collides
 
-You can install the package via composer:
+Most of the isolation you need already exists, and knowing which part is missing is what makes the rest of this design legible.
 
-```bash
-composer require deskhq/laravel-worktree
+Git worktrees already isolate the working tree. Sail already isolates containers, networks and named volumes per Compose project, keyed off `COMPOSE_PROJECT_NAME`. Two worktrees of the same repository are almost entirely independent before this package does anything at all.
+
+Two things are not:
+
+- **Host port bindings.** Every published port in `compose.yaml` binds the same host port in every worktree. The second one to start dies on `Bind for :::5432 failed`, minutes into a bootstrap, naming a port nobody configured.
+- **`vendor/` and `node_modules/`.** They live in the working tree, they are enormous, and they are not interchangeable between branches.
+
+So that is the whole job: hand each worktree a unique block of host ports and its own Compose project, then install its dependencies. Everything else in this package is in service of doing that without surprising the application it runs inside.
+
+## It runs on the host, and it has to
+
+This is the first thing worth understanding, because it is otherwise the first issue anyone files.
+
+The implementation is a binary — `vendor/bin/worktree` — and not `php artisan worktree:create`. Under Sail, artisan runs **inside the app container**, and from in there every single thing this package needs is unreachable: there is no Docker socket to create containers with, no host git to add a worktree to, no sibling worktrees directory, and no way to bind a host port. A worktree also has no `vendor/` at the moment it is created, so there is no application to boot and no artisan to run in the first place.
+
+`php artisan worktree:{create,list,remove,reap}` do exist, as a facade. Called from inside the container they refuse and tell you what to run instead:
+
+```
+worktree must run on the host, not inside the container.
+Use:  ./vendor/bin/worktree create 441
 ```
 
-This installs the host binary at `vendor/bin/worktree`.
+Laravel is never booted by the binary. Nothing in it depends on an application that may not be installed yet, or may be broken — which is also why `config/worktree.php` may use `env()` but may not reach for a facade or a container binding.
 
-You can publish the config file with:
+## Requirements
+
+| | |
+| --- | --- |
+| `git` | worktrees, and the ref resolution behind `create <slug> [base]` |
+| `docker` | Compose **v2.24 or newer** — the overlay uses the `!override` merge tag, and an older Compose merges `depends_on` instead of replacing it, silently starting everything. Checked before anything is generated. |
+| PHP on the host | the binary is PHP, and it runs outside the container. `ext-pcntl` is required, for the signal handling that releases locks on an interrupted run. |
+| `laravel/sail` | a soft dependency: detected, never required, and deliberately not in this package's `require`. |
+| `gh` | **optional.** It enriches a numeric slug with the issue title. Absent, logged out, offline, or pointed at a repository with no such issue are all the same ordinary answer. |
+
+No `jq`. The bash original this replaces needed it; nothing here does.
+
+## Installation
+
+```bash
+composer require --dev deskhq/laravel-worktree
+```
+
+That installs the host binary at `vendor/bin/worktree`. Publish the config with:
 
 ```bash
 php artisan vendor:publish --tag="worktree-config"
 ```
 
-## Usage
+The published `config/worktree.php` is the real documentation for this package — every key is commented where it sits, along with the traps that are not obvious until they have cost you an afternoon. A repository that publishes nothing at all still runs, on the defaults that file documents.
 
-The binary is the implementation, and it runs on the host:
+For a fully worked example rather than a commented blank, see [`stubs/worktree-example.php`](stubs/worktree-example.php) — the real configuration of the application this package was extracted from, including its eleven-step bootstrap. A test in this package's own suite loads it through the same validator the binary uses, so it cannot quietly stop being legal.
+
+There is also an escape-hatch script to publish, once you need one:
+
+```bash
+php artisan vendor:publish --tag="worktree-stubs"
+chmod +x bin/worktree-playwright
+```
+
+The `chmod` is not optional: `vendor:publish` copies with the umask's permissions rather than the source file's, so a published script arrives non-executable and a `host` step invoking it fails on permissions rather than on anything to do with the script.
+
+## Usage
 
 ```bash
 cd "$(./vendor/bin/worktree create 441)"
@@ -37,13 +84,6 @@ cd "$(./vendor/bin/worktree create 441)"
 Only machine-readable output — the path from `create`, the table from `list` — reaches stdout. Every diagnostic, and the whole output of every subprocess it runs, goes to stderr, so `cd "$(...)"` keeps working on a run that also produced megabytes of Composer and npm output.
 
 Exit codes: `0` success, `1` operational failure, `64` usage error. An interrupted run (`130`) or a terminated one (`143`) still releases everything it was holding.
-
-`php artisan worktree:{create,list,remove,reap}` delegate to that binary. Under Sail, artisan runs inside the app container — where there is no docker socket, no host git and no worktrees directory — so from in there they refuse and tell you what to run instead:
-
-```
-worktree must run on the host, not inside the container.
-Use:  ./vendor/bin/worktree create 441
-```
 
 `worktree:reap` is the one to run from the binary rather than through artisan when you want to be asked before anything is destroyed: the facade gives the binary pipes rather than your terminal, so a `reap` under it has nobody to confirm with and says so rather than assuming. `--yes` and `--dry-run` work either way.
 
@@ -602,6 +642,55 @@ Both are exotic, and covering them would mean adding `always:` and `when: shell_
 ['host' => 'bin/worktree-playwright {{path}}',
  'allow_failure' => true,
  'degrade' => 'Playwright is not fully installed; tests/Browser will not run here'],
+```
+
+## Migrating from a bash script
+
+This package was extracted from one, and the translation is the best available description of where the seam is. A thousand lines of `bin/worktree` became one `config/worktree.php` and one escape-hatch script — [`stubs/worktree-example.php`](stubs/worktree-example.php) is the result, and it is the file to read alongside this table.
+
+| In the script | Here |
+| --- | --- |
+| `SLOTS`, `PORT_BASE` | `slots`, `port_base` |
+| `DEFAULT_BASE` | `base_branch` |
+| `WORKTREE_STARTED_SERVICES`, and the `depends_on` in `write_override` | `compose.keep_services` |
+| the `reverb.ports` block in `write_override` | `compose.port_overrides` |
+| every `upsert_env` in `write_env` | `env` |
+| `detach_unstarted_services` | `env`, with blank hosts and container-free drivers |
+| `migrate_and_seed` | two `steps`: `sentinel` on the seed, `when: exists:` on the migrate |
+| `install_playwright_browsers`, and the apt park/restore | `bin/worktree-playwright`, as one step with `allow_failure` and `degrade` |
+| the install sequence in `cmd_create` | `steps` |
+| `slugify`, `gh issue view` | built in — see [Names](#names) |
+| `find_free_slot`, `acquire_lock`, the registry | built in |
+| `teardown_project`, `orphan_projects`, `cmd_reap` | built in — `remove` and `reap` |
+| `emit`, and parking stdout on fd 3 | built in — the stdout contract holds for every step you configure |
+| `require_tooling` | built in, and no `jq`: it was the script's only hard dependency and nothing here needs it |
+
+### Four behaviour changes, one of which bites
+
+| Change | Consequence |
+| --- | --- |
+| `compose.override.yaml` → `compose.worktree.yaml` + `SAIL_FILES` | stops clobbering an override file the application owns |
+| a per-repository registry → the machine-global one in `~/.laravel-worktree` | one-time migration; the old file is not read, and moving it by hand is the whole of it |
+| `DEFAULT_BASE=master` → `base_branch`, defaulting to the repository's default branch | **not the no-op it looks like** — see below |
+| project `desk-<NNN>` → `wt-<repo-slug>-<slug>` | **existing worktrees' Docker resources become unreachable by this tool** |
+
+**The base branch.** A script that hardcoded `master` and a package that asks git for the default branch agree only when your integration branch *is* your default branch. If work is cut from `develop` while GitHub's default is `master`, leaving `base_branch` unset forks every worktree from whatever `master` currently is — which may be many commits behind, and the omission surfaces later as a conflict or a missing commit rather than as an error. Set it explicitly:
+
+```php
+'base_branch' => env('WORKTREE_BASE', 'develop'),
+```
+
+**Reap before you switch.** This is the one that costs you disk you cannot find again. `reap` can only scope itself by Compose project name, and it only ever looks at projects carrying the `wt-` marker. Any project the old script created is invisible to it — so run the **old** script's `reap` while you still have it:
+
+```bash
+bin/worktree reap        # the OLD script, before deleting it
+```
+
+If it is already gone, the resources are still reachable by hand, one project at a time:
+
+```bash
+docker volume ls --filter 'label=com.docker.compose.project=<old-project>'
+docker compose -p <old-project> down --volumes --remove-orphans
 ```
 
 ## Testing
