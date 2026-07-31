@@ -3,6 +3,7 @@
 namespace DeskHQ\LaravelWorktree\Config;
 
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
+use DeskHQ\LaravelWorktree\Naming\Slug;
 
 /**
  * What `config/worktree.php` may say, and what it means when it says nothing.
@@ -177,13 +178,14 @@ final readonly class Schema
     /**
      * The repo slug becomes part of the Compose project name, so it has to be a
      * legal one — Docker would otherwise reject it much later, when the first
-     * container is started.
+     * container is started. It never becomes the *whole* of one: every project
+     * name carries the literal `wt-` marker, which nothing set here can remove.
      */
     private static function repoSlug(mixed $value): ?string
     {
         $slug = self::optionalString($value, 'repo_slug');
 
-        if ($slug !== null && preg_match('/\A[a-z0-9][a-z0-9_-]*\z/', $slug) !== 1) {
+        if ($slug !== null && ! Slug::isProjectName($slug)) {
             throw self::error("repo_slug must be a valid Compose project name ([a-z0-9][a-z0-9_-]*), '$slug' given");
         }
 

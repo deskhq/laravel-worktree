@@ -13,6 +13,7 @@ arch('the host binary never reaches for Laravel')
         'DeskHQ\LaravelWorktree\Config',
         'DeskHQ\LaravelWorktree\Console',
         'DeskHQ\LaravelWorktree\Git',
+        'DeskHQ\LaravelWorktree\Naming',
         'DeskHQ\LaravelWorktree\Process',
         'DeskHQ\LaravelWorktree\Registry',
         'DeskHQ\LaravelWorktree\Support',
