@@ -111,12 +111,13 @@ final readonly class ProcessRunner
      * Ask an optional tool a question, keeping its answer and discarding
      * whatever it had to say about itself.
      *
-     * One caller: the `gh issue view` title lookup, which is an enrichment
-     * rather than a step. `gh` may be absent, logged out or offline, and each of
-     * those is an ordinary answer — `gh: command not found` written to the
-     * diagnostics would read as a failure of the run rather than as the absence
-     * of a tool nothing required, and the worktree is named `issue-<n>` either
-     * way.
+     * Two callers, both enrichments rather than steps: the `gh issue view` title
+     * lookup, and the `stty size` a terminal is measured with. `gh` may be
+     * absent, logged out or offline, and `stty` may be answering for a process
+     * with no controlling terminal — each of those is an ordinary answer, and
+     * `gh: command not found` written to the diagnostics would read as a failure
+     * of the run rather than as the absence of a tool nothing required. The
+     * worktree is named `issue-<n>` and the table is 80 columns wide either way.
      *
      * @param  list<string>  $command
      */
@@ -179,34 +180,6 @@ final readonly class ProcessRunner
         $process->disableOutput();
 
         return $process->run();
-    }
-
-    /**
-     * Run a command over $input and keep what it made of it.
-     *
-     * One caller: the table `list` aligns through `column`, which is a filter —
-     * text in on stdin, text out on stdout, both of them values here rather than
-     * this process's streams. Its stderr is dropped rather than shown for the
-     * reason {@see consult()} drops `gh`'s: `column: command not found` is the
-     * question being answered, not a diagnostic, and the caller has a table to
-     * print either way.
-     *
-     * @param  list<string>  $command
-     */
-    public function filter(array $command, string $input): ProcessResult
-    {
-        $process = $this->process($command, null);
-        $process->setInput($input);
-
-        $captured = '';
-
-        $exitCode = $process->run(function (string $type, string $chunk) use (&$captured): void {
-            if ($type === Process::OUT) {
-                $captured .= $chunk;
-            }
-        });
-
-        return new ProcessResult($exitCode, $captured);
     }
 
     /**

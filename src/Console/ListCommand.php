@@ -26,6 +26,23 @@ use DeskHQ\LaravelWorktree\Runtime\Orphans;
  * orphan warning below goes to **stderr** — a diagnostic printed between the
  * rows would be read as a row, and `worktree list | wc -l` would count it.
  *
+ * ## Two renderings
+ *
+ * That answer is also read by a person, and the two want different tables. A row
+ * carrying every field in full — the key, the branch, the absolute path — is
+ * about 250 columns wide, which is right for `awk` and hard-wraps in a window;
+ * the wrap puts a continuation under no header at all, which is the shape this
+ * table most wants to avoid, arrived at from the other direction.
+ *
+ * So the fields are chosen by who is reading, on {@see Emitter::isInteractive()}:
+ * a pipe gets all of them, tab-separated, and a terminal gets the ones that are
+ * not already on the line somewhere else ({@see fitted()}). {@see Table} does
+ * the rendering; what is elided is decided here, because it turns on what these
+ * particular columns mean rather than on how wide they are.
+ *
+ * `--json` is neither, and is unchanged by both: a script that asked for
+ * structure gets structure whatever its stdout is attached to.
+ *
  * ## Two scopes
  *
  * The registry is machine-global, because host ports are; a listing is not, and
@@ -113,7 +130,69 @@ final readonly class ListCommand implements Command
     }
 
     /**
-     * The table, one line at a time, on stdout.
+     * The table, one line at a time, on stdout — in whichever of its two
+     * renderings the far side of the stream calls for.
+     *
+     * @param  array<string, Entry>  $entries
+     * @param  list<string>  $ports
+     */
+    private function tabulate(array $entries, array $ports): void
+    {
+        if ($this->emitter->isInteractive()) {
+            $this->fitted($entries, $ports);
+
+            return;
+        }
+
+        [$headers, $rows] = self::table($entries, $ports);
+
+        foreach (Table::tsv($headers, $rows) as $line) {
+            $this->emitter->emit($line);
+        }
+    }
+
+    /**
+     * The table a person gets: the fields that are not already on the line, in
+     * the width there is.
+     *
+     * Two columns are dropped rather than squeezed, because squeezing them would
+     * elide characters to make room for characters that say the same thing:
+     *
+     * - **`BRANCH`**, when every key ends with its branch. The key is `wt-` plus
+     *   the repository plus the slug, so on a branch named by an agent from an
+     *   issue title — the case this package exists to serve — the two together
+     *   are most of the line and one piece of information. A branch that
+     *   slugified differently, `feat/checkout` against `feat-checkout`, is not
+     *   implied by anything and keeps its column.
+     * - **the leading directories of `PATH`**, which every row of a repository
+     *   shares. The root is named once above the table instead, where it is read
+     *   once rather than counted past on every row.
+     *
+     * @param  array<string, Entry>  $entries
+     * @param  list<string>  $ports
+     */
+    private function fitted(array $entries, array $ports): void
+    {
+        $style = Style::forStream($this->emitter->isInteractive());
+        $root = self::sharedRoot($entries);
+
+        [$headers, $rows] = self::table($entries, $ports, ! self::impliesItsBranches($entries), $root);
+
+        // Whole, and never elided to fit: it is the one line here that is prose
+        // rather than a row, and a path with its middle taken out is a path
+        // nobody can retype. It has no columns to shear, so a narrow window
+        // wrapping it costs nothing the rows would have paid.
+        if ($root !== null) {
+            $this->emitter->emit($style->dim('paths under '.$root));
+        }
+
+        foreach (Table::fitted($headers, $rows, (new Terminal($this->runner))->width(), $style) as $line) {
+            $this->emitter->emit($line);
+        }
+    }
+
+    /**
+     * The headers and the rows, as both renderings build them.
      *
      * The port columns are the configured ones in their configured order, so a
      * repository that publishes a `meilisearch` port sees it here without this
@@ -122,10 +201,13 @@ final readonly class ListCommand implements Command
      *
      * @param  array<string, Entry>  $entries
      * @param  list<string>  $ports
+     * @param  bool  $branches  Whether a `BRANCH` column is carried at all.
+     * @param  string|null  $root  The directory paths are shown relative to, or null for absolute ones.
+     * @return array{list<string>, list<list<string>>}
      */
-    private function tabulate(array $entries, array $ports): void
+    private static function table(array $entries, array $ports, bool $branches = true, ?string $root = null): array
     {
-        $headers = ['KEY', 'SLOT', ...array_map(strtoupper(...), $ports), 'BRANCH', 'PATH'];
+        $headers = ['KEY', 'SLOT', ...array_map(strtoupper(...), $ports), ...($branches ? ['BRANCH'] : []), 'PATH'];
         $rows = [];
 
         foreach ($entries as $entry) {
@@ -135,12 +217,92 @@ final readonly class ListCommand implements Command
                 $published[] = (string) ($entry->ports[$name] ?? '-');
             }
 
-            $rows[] = [$entry->key, (string) $entry->slot, ...$published, $entry->branch, $entry->path];
+            $rows[] = [
+                $entry->key,
+                (string) $entry->slot,
+                ...$published,
+                ...($branches ? [$entry->branch] : []),
+                self::under($entry->path, $root),
+            ];
         }
 
-        foreach ((new Table($this->runner))->render($headers, $rows) as $line) {
-            $this->emitter->emit($line);
+        return [$headers, $rows];
+    }
+
+    /**
+     * Whether every key already ends with the branch it is checked out on, which
+     * is what makes a `BRANCH` column a second copy of one.
+     *
+     * All of them or none: a column is per table, and blanking the redundant
+     * cells of one would cost the reader more than the width it saved.
+     *
+     * @param  array<string, Entry>  $entries
+     */
+    private static function impliesItsBranches(array $entries): bool
+    {
+        foreach ($entries as $entry) {
+            if (! str_ends_with($entry->key, '-'.$entry->branch)) {
+                return false;
+            }
         }
+
+        return true;
+    }
+
+    /**
+     * The deepest directory every entry is under, or null when there is nothing
+     * worth naming.
+     *
+     * Usually the repository's own worktrees directory, since that is where all
+     * of them live; under `--all` it is wherever the checkouts on this machine
+     * happen to converge, which may be nowhere — two repositories on different
+     * volumes share only `/`, and a table announcing that has said nothing.
+     *
+     * @param  array<string, Entry>  $entries
+     */
+    private static function sharedRoot(array $entries): ?string
+    {
+        $root = null;
+
+        foreach ($entries as $entry) {
+            $directory = dirname($entry->path);
+            $root = $root === null ? $directory : self::sharedPrefix($root, $directory);
+        }
+
+        return $root === null || $root === '' || $root === '/' || $root === '.' ? null : $root;
+    }
+
+    /**
+     * The directories $left and $right have in common, compared segment by
+     * segment: `/srv/desk-worktrees` and `/srv/desk-work` share `/srv`, not
+     * `/srv/desk-work`.
+     */
+    private static function sharedPrefix(string $left, string $right): string
+    {
+        $shared = [];
+        $against = explode('/', $right);
+
+        foreach (explode('/', $left) as $depth => $segment) {
+            if (($against[$depth] ?? null) !== $segment) {
+                break;
+            }
+
+            $shared[] = $segment;
+        }
+
+        return implode('/', $shared);
+    }
+
+    /**
+     * $path as its tail below $root, or whole when it is not under one.
+     */
+    private static function under(string $path, ?string $root): string
+    {
+        if ($root === null || ! str_starts_with($path, $root.'/')) {
+            return $path;
+        }
+
+        return substr($path, strlen($root) + 1);
     }
 
     /**
