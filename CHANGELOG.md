@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/deskhq/laravel-worktree/compare/v0.1.0...v0.2.0) (2026-07-31)
+
+
+### Features
+
+* refuse a create when a started service publishes a host port nothing offsets ([#45](https://github.com/deskhq/laravel-worktree/issues/45)) ([4a37771](https://github.com/deskhq/laravel-worktree/commit/4a377718a86c014bae888bb89467be02868954cd))
+
 ## [0.1.0](https://github.com/deskhq/laravel-worktree/compare/v0.0.1...v0.1.0) (2026-07-31)
 
 
