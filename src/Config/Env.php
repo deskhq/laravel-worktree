@@ -37,7 +37,19 @@ final class Env
      * over `.env` when the *shell* set it, and neither looks at what the file
      * says. {@see EnvFile} decides which file to generate on this value.
      */
-    private static ?string $exported;
+    private static ?string $exported = null;
+
+    /**
+     * Whether {@see $exported} has been captured yet.
+     *
+     * A flag of its own, rather than `isset(self::$exported)`, because the
+     * value being captured is `null` whenever nobody exported `APP_ENV` — which
+     * is almost always — and `isset()` cannot tell a captured `null` from an
+     * uncaptured property. Reading it a second time would then re-read
+     * `APP_ENV` *after* the `.env` had been loaded, which is the single thing
+     * this capture exists to prevent.
+     */
+    private static bool $captured = false;
 
     /**
      * Make `env()` available and populate it from the main checkout's `.env`.
@@ -86,10 +98,11 @@ final class Env
      */
     public static function exportedEnvironment(): ?string
     {
-        if (! isset(self::$exported)) {
+        if (! self::$captured) {
             $environment = self::get('APP_ENV');
 
             self::$exported = is_string($environment) && $environment !== '' ? $environment : null;
+            self::$captured = true;
         }
 
         return self::$exported;

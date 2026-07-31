@@ -2,6 +2,7 @@
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
+use Symfony\Component\Process\Process;
 
 it('runs on documented defaults when the repository ships no config file', function () {
     $root = repositoryWithConfig(null);
@@ -136,6 +137,33 @@ it('ships a worked example that is still legal', function () {
         ->and($example->compose['keep_services'])->not->toBeEmpty()
         ->and($example->env)->toHaveKey('REVERB_PORT');
 });
+
+it("does not mistake the .env's own APP_ENV for one the shell exported", function (array $environment, ?string $exported, string $appEnv) {
+    $root = repositoryWithConfig(null);
+    file_put_contents($root.'/.env', "APP_ENV=local\nAPP_NAME=Worktree\n");
+
+    $process = new Process(
+        [PHP_BINARY, packagePath('tests/Fixtures/reports-the-exported-environment.php'), $root],
+        null,
+        $environment,
+    );
+    $process->setTimeout(60);
+    $process->run();
+
+    // Almost every Laravel application sets APP_ENV in its .env and exports it
+    // from no shell at all. Reading the file's value as the shell's writes the
+    // worktree's ports into `.env.local` — a file bin/sail only sources when
+    // APP_ENV really is exported, so it sources nothing, every port falls back
+    // to its compose.yaml default, and the first worktree collides with the
+    // main checkout on `Bind for 0.0.0.0:5432 failed`.
+    expect(json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR))
+        ->toBe(['exported' => $exported, 'app_env' => $appEnv]);
+
+    deleteDirectory($root);
+})->with([
+    'set by the file alone' => [['APP_ENV' => false], null, 'local'],
+    'exported over the file' => [['APP_ENV' => 'production'], 'production', 'production'],
+]);
 
 it('names the key it does not recognise', function (array $config, string $message) {
     expect(fn () => Configuration::fromArray($config))
