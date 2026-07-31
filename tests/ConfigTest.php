@@ -146,6 +146,12 @@ it('refuses a config it cannot act on', function (array $config, string $message
     'a step that runs two things' => [['steps' => [['host' => 'true', 'sail' => 'true']]], 'steps.0 names host and sail, but a step runs one command; use one of host, sail, sail_root'],
     'a condition the DSL cannot express' => [['steps' => [['host' => 'true', 'when' => 'shell_fails:probe']]], "steps.0.when must be one of missing:, exists:, env_empty:, 'shell_fails:probe' given"],
     'an allow_failure that is not a boolean' => [['steps' => [['host' => 'true', 'allow_failure' => 'yes']]], "steps.0.allow_failure must be true or false, 'yes' given"],
+    // A notice on a step that aborts the bootstrap is a notice nothing ever
+    // prints — written, read as covered, and silent.
+    'a degrade notice nothing would reach' => [
+        ['steps' => [['host' => 'npm run build', 'degrade' => 'assets were not built']]],
+        "steps.0.degrade is only printed for a step that was allowed to fail; add 'allow_failure' => true, or drop the message",
+    ],
 ]);
 
 it('says so when the file does not return an array', function () {

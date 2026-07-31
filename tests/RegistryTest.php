@@ -61,6 +61,21 @@ it('drops a port name the configuration no longer declares', function () {
         ->toBe(['app', 'vite', 'reverb', 'db', 'redis']);
 });
 
+it('remembers which bootstrap steps degraded, and says nothing when none did', function () {
+    $registry = registryIn($this->home);
+
+    $registry->put(entryFor('wt-desk-441', slot: 0));
+    $registry->put(entryFor('wt-desk-512', slot: 1)->withDegraded(['Browsers', 'Building assets']));
+
+    expect(registryIn($this->home)->entry('wt-desk-441')->degraded)->toBe([])
+        ->and(registryIn($this->home)->entry('wt-desk-512')->degraded)->toBe(['Browsers', 'Building assets'])
+        // A healthy worktree's entry reads as a healthy worktree's entry.
+        ->and(json_decode((string) file_get_contents($this->home.'/registry.json'), true))
+        ->toHaveKey('wt-desk-512.degraded')
+        ->and(json_decode((string) file_get_contents($this->home.'/registry.json'), true)['wt-desk-441'])
+        ->not->toHaveKey('degraded');
+});
+
 it('scopes to one checkout while allocation still sees the whole machine', function () {
     $registry = registryIn($this->home);
 

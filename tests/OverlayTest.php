@@ -8,7 +8,6 @@ use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Excludes;
 use DeskHQ\LaravelWorktree\Naming\Identity;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
-use Symfony\Component\Process\Process;
 use Symfony\Component\Yaml\Tag\TaggedValue;
 use Symfony\Component\Yaml\Yaml;
 
@@ -354,13 +353,4 @@ function fakeDocker(string $root, ?string $version): string
 function keepServices(): array
 {
     return ['keep_services' => ['pgsql', 'redis'], 'port_overrides' => []];
-}
-
-/**
- * Whether git itself considers $file ignored inside the worktree at $path —
- * which is the only thing the exclude is for.
- */
-function ignoredInGit(string $path, string $file): bool
-{
-    return (new Process(['git', 'check-ignore', '--quiet', '--', $file], $path))->run() === 0;
 }

@@ -25,7 +25,7 @@ final readonly class Placeholders
      *
      * @var list<string>
      */
-    public const array Names = ['project', 'slug', 'branch', 'path'];
+    public const array Names = ['project', 'slug', 'branch', 'path', 'uid', 'gid'];
 
     /**
      * @param  array<string, string>  $values
@@ -45,6 +45,8 @@ final readonly class Placeholders
             'slug' => $identity->slug,
             'branch' => $identity->branch,
             'path' => $identity->path,
+            'uid' => (string) self::userId(),
+            'gid' => (string) self::groupId(),
         ];
 
         foreach ($ports as $name => $port) {
@@ -68,6 +70,26 @@ final readonly class Placeholders
             fn (array $match): string => $this->resolve(trim($match[1]), $where),
             $value,
         );
+    }
+
+    /**
+     * The host user this run is, which a step handing work to a container has
+     * to say out loud: `docker run --user {{uid}}:{{gid}}` is the difference
+     * between a `vendor/` the person on the host owns and one they cannot
+     * delete. `bin/sail` exports the same pair as `WWWUSER` and `WWWGROUP`.
+     *
+     * `posix_*` where the extension is compiled in, and the owner of the running
+     * script where it is not — which is the same user in the case that matters,
+     * because that is who installed this package.
+     */
+    private static function userId(): int
+    {
+        return function_exists('posix_getuid') ? posix_getuid() : (int) getmyuid();
+    }
+
+    private static function groupId(): int
+    {
+        return function_exists('posix_getgid') ? posix_getgid() : (int) getmygid();
     }
 
     private function resolve(string $name, string $where): string

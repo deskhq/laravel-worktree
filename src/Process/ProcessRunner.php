@@ -3,6 +3,7 @@
 namespace DeskHQ\LaravelWorktree\Process;
 
 use DeskHQ\LaravelWorktree\Console\Output;
+use Symfony\Component\Process\Exception\RuntimeException;
 use Symfony\Component\Process\Process;
 
 /**
@@ -35,6 +36,43 @@ final readonly class ProcessRunner
     public function run(array $command, ?string $cwd = null, array $env = []): int
     {
         $process = $this->process($command, $cwd, $env);
+
+        return $process->run(function (string $type, string $chunk): void {
+            $this->output->write($chunk);
+        });
+    }
+
+    /**
+     * Run a bootstrap step, as the shell that wrote it would have.
+     *
+     * Steps are strings in a config file — `artisan migrate --force`, `npm ci &&
+     * npm run build` — so they get a shell, and the shape is `laravel/sail`'s
+     * own `runCommands()` (MIT): a shell command line, no timeout, and a TTY
+     * when there is one to be had.
+     *
+     * The TTY is what makes Composer, npm and artisan print progress rather than
+     * a wall of scrollback, and it does not cost the stdout contract: Symfony
+     * only takes it when this process's stdout is *already* a terminal, and it
+     * opens `/dev/tty` itself rather than handing the child a descriptor of
+     * ours. Under `cd "$(worktree create 441)"` stdout is a pipe, so the
+     * condition is false, and every byte goes back to falling through the pipes
+     * into {@see Output}. Either way a step never reaches the caller's stdout.
+     *
+     * @param  array<string, string>  $env  Added to the environment the step inherits.
+     */
+    public function shell(string $command, string $cwd, array $env = []): int
+    {
+        $process = Process::fromShellCommandline($command, $cwd, $env === [] ? null : $env);
+        $process->setTimeout(null);
+
+        if (Process::isTtySupported()) {
+            try {
+                $process->setTty(true);
+            } catch (RuntimeException) {
+                // Sail warns here; we fall back silently, because the fallback
+                // is the pipes below and they lose nothing but the colours.
+            }
+        }
 
         return $process->run(function (string $type, string $chunk): void {
             $this->output->write($chunk);

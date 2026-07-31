@@ -39,6 +39,18 @@ final readonly class Entry
         public array $ports,
         /** When the slot was claimed, as an ISO-8601 UTC timestamp. */
         public string $createdAt,
+        /**
+         * The bootstrap steps that failed and were allowed to, by name.
+         *
+         * Re-entering a worktree runs these and nothing else. A step degrades
+         * because a registry was unreachable or a download timed out far more
+         * often than because it is genuinely broken, so the next run is the
+         * natural moment to try again — while the steps that succeeded stay
+         * skipped, which is what keeps re-entry cheap.
+         *
+         * @var list<string>
+         */
+        public array $degraded = [],
     ) {}
 
     /**
@@ -74,15 +86,16 @@ final readonly class Entry
             self::text($entry, 'path', $key),
             $ports->complete($slot, is_array($recorded) ? $recorded : []),
             is_string($entry['created_at'] ?? null) ? $entry['created_at'] : '',
+            self::degraded($entry['degraded'] ?? []),
         );
     }
 
     /**
-     * @return array{slot: int, repo: string, slug: string, branch: string, path: string, ports: array<string, int>, created_at: string}
+     * @return array{slot: int, repo: string, slug: string, branch: string, path: string, ports: array<string, int>, created_at: string, degraded?: list<string>}
      */
     public function toArray(): array
     {
-        return [
+        $entry = [
             'slot' => $this->slot,
             'repo' => $this->repo,
             'slug' => $this->slug,
@@ -91,6 +104,30 @@ final readonly class Entry
             'ports' => $this->ports,
             'created_at' => $this->createdAt,
         ];
+
+        // Written only when there is something to say: a healthy worktree's
+        // entry should read as a healthy worktree's entry.
+        return $this->degraded === [] ? $entry : $entry + ['degraded' => $this->degraded];
+    }
+
+    /**
+     * The same entry, carrying what the bootstrap that just ran left behind.
+     *
+     * @param  list<string>  $degraded
+     */
+    public function withDegraded(array $degraded): self
+    {
+        return new self(
+            $this->key,
+            $this->slot,
+            $this->repo,
+            $this->slug,
+            $this->branch,
+            $this->path,
+            $this->ports,
+            $this->createdAt,
+            $degraded,
+        );
     }
 
     /**
@@ -99,6 +136,22 @@ final readonly class Entry
     public function belongsTo(string $repo): bool
     {
         return $this->repo === rtrim($repo, '/');
+    }
+
+    /**
+     * Names that are no longer strings, or no longer a list, are dropped rather
+     * than refused: this field costs a retry, and an entry is not worth
+     * rejecting a worktree over.
+     *
+     * @return list<string>
+     */
+    private static function degraded(mixed $recorded): array
+    {
+        if (! is_array($recorded)) {
+            return [];
+        }
+
+        return array_values(array_filter($recorded, is_string(...)));
     }
 
     /**
