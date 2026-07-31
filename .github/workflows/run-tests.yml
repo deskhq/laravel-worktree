@@ -1,20 +1,19 @@
 name: run-tests
 
+# No path filters, deliberately. A required check is required of every pull
+# request, and a workflow that a README-only change does not trigger leaves that
+# check pending forever — nothing to report is not the same as reporting green.
+# Every pull request runs the matrix; the cost of that is a few runner-minutes.
+#
+# `push` is narrowed to `main` for the opposite reason: a branch push is already
+# covered by the pull request that has to exist before it can merge, so running
+# both only duplicates every job. What remains is the run on `main` itself,
+# which is what release-please cuts a tag from.
 on:
   push:
-    paths:
-      - '**.php'
-      - '.github/workflows/run-tests.yml'
-      - 'phpunit.xml.dist'
-      - 'composer.json'
-      - 'composer.lock'
+    branches:
+      - main
   pull_request:
-    paths:
-      - '**.php'
-      - '.github/workflows/run-tests.yml'
-      - 'phpunit.xml.dist'
-      - 'composer.json'
-      - 'composer.lock'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -82,3 +81,27 @@ jobs:
       # depending on state — or on a helper — another file left behind.
       - name: Execute tests in parallel
         run: vendor/bin/pest --ci --parallel
+
+  # The one name branch protection requires.
+  #
+  # A required check is matched by job name, and the matrix above produces eight
+  # of them — `P8.5 - L13.* - prefer-stable - ubuntu-latest`, and so on — so
+  # every edit to the matrix would invalidate the required list and, until
+  # somebody noticed, block `main` on a check that no longer runs. This job's
+  # name never changes.
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    needs: test
+    # `always()`, so a matrix that failed or was cancelled still reports here.
+    # Without it this job would be skipped, and a skipped required check is one
+    # that never reports.
+    if: always()
+    steps:
+      - name: Require every matrix job to have succeeded
+        env:
+          RESULT: ${{ needs.test.result }}
+        run: |
+          echo "The test matrix reported: $RESULT"
+          [ "$RESULT" = 'success' ]

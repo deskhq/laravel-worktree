@@ -1,3 +1,7 @@
+# Squash, because it is the only merge method this repository allows:
+# `--merge` asked for a merge commit and failed on every run, independently of
+# anything branch protection does. `--auto` then waits for the required checks
+# rather than merging on the spot, which is what makes this safe to leave on.
 name: dependabot-auto-merge
 on: pull_request_target
 
@@ -20,14 +24,14 @@ jobs:
 
       - name: Auto-merge Dependabot PRs for semver-minor updates
         if: ${{steps.metadata.outputs.update-type == 'version-update:semver-minor'}}
-        run: gh pr merge --auto --merge "$PR_URL"
+        run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{github.event.pull_request.html_url}}
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
 
       - name: Auto-merge Dependabot PRs for semver-patch updates
         if: ${{steps.metadata.outputs.update-type == 'version-update:semver-patch'}}
-        run: gh pr merge --auto --merge "$PR_URL"
+        run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{github.event.pull_request.html_url}}
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}

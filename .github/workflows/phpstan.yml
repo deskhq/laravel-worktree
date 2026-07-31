@@ -1,11 +1,17 @@
 name: PHPStan
 
+# `pull_request`, because this is a required check and it was `push`-only: it
+# never reported on a pull request at all, and requiring a check that cannot
+# report blocks the branch permanently.
+#
+# No path filters, for the same reason — a README-only pull request would leave
+# the check pending forever. `push` narrows to `main`, since a branch push is
+# already covered by the pull request it needs before it can merge.
 on:
   push:
-    paths:
-      - '**.php'
-      - 'phpstan.neon.dist'
-      - '.github/workflows/phpstan.yml'
+    branches:
+      - main
+  pull_request:
 
 jobs:
   phpstan:
