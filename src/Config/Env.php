@@ -25,8 +25,20 @@ use Dotenv\Repository\RepositoryInterface;
  * and another under `php artisan worktree:list` — a divergence that costs an
  * afternoon to find because both readings look right.
  */
-final readonly class Env
+final class Env
 {
+    /**
+     * `APP_ENV` as this process inherited it, or null.
+     *
+     * Captured, rather than read when it is wanted, because reading a `.env`
+     * puts its own `APP_ENV` into `$_SERVER`, `$_ENV` and `putenv` — after
+     * which the two are indistinguishable, and they mean opposite things:
+     * `bin/sail` and `LoadEnvironmentVariables` both prefer `.env.<APP_ENV>`
+     * over `.env` when the *shell* set it, and neither looks at what the file
+     * says. {@see EnvFile} decides which file to generate on this value.
+     */
+    private static ?string $exported;
+
     /**
      * Make `env()` available and populate it from the main checkout's `.env`.
      *
@@ -36,6 +48,8 @@ final readonly class Env
     public static function load(string $root): void
     {
         require_once __DIR__.'/env-shim.php';
+
+        self::exportedEnvironment();
 
         if (! class_exists(Dotenv::class)) {
             // No phpdotenv — a repository with no Laravel installed yet. Real
@@ -64,15 +78,33 @@ final readonly class Env
     }
 
     /**
+     * The environment this run was started in, from before any `.env` was read.
+     *
+     * Captured on first use, which the binary does at the top of the run: it
+     * loads the configuration before it does anything else, and loading it
+     * comes through here.
+     */
+    public static function exportedEnvironment(): ?string
+    {
+        if (! isset(self::$exported)) {
+            $environment = self::get('APP_ENV');
+
+            self::$exported = is_string($environment) && $environment !== '' ? $environment : null;
+        }
+
+        return self::$exported;
+    }
+
+    /**
      * `bin/sail` and `LoadEnvironmentVariables` agree on this: when `APP_ENV`
      * is set in the real environment and the matching file exists, it is read
      * *instead of* `.env`, not on top of it.
      */
     private static function fileIn(string $root): string
     {
-        $environment = self::get('APP_ENV');
+        $environment = self::exportedEnvironment();
 
-        if (is_string($environment) && $environment !== '' && is_file($root.'/.env.'.$environment)) {
+        if ($environment !== null && is_file($root.'/.env.'.$environment)) {
             return '.env.'.$environment;
         }
 

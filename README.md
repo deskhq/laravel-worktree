@@ -157,6 +157,79 @@ error: worktree /Users/…/441-fix-login is on 'develop', expected '441-fix-logi
 
 One `rev-parse`, and it runs on re-entry too — so a worktree someone switched branches in by hand is caught before a single bootstrap step touches it.
 
+## The worktree's `.env`
+
+Where a worktree stops sharing the machine with its siblings: `env` in `config/worktree.php` offsets the ports it publishes, names its Compose project, and points the services it never starts somewhere harmless.
+
+```php
+'env' => [
+    'APP_PORT'             => '{{port.app}}',
+    'VITE_PORT'            => '{{port.vite}}',
+    'FORWARD_DB_PORT'      => '{{port.db}}',
+    'FORWARD_REDIS_PORT'   => '{{port.redis}}',
+    'COMPOSE_PROJECT_NAME' => '{{project}}',
+    'APP_URL'              => 'http://localhost:{{port.app}}',
+
+    'REVERB_PORT' => 8080,          // container-internal, deliberately not offset
+
+    'COMPOSE_PROFILES' => '',       // and the services this worktree never starts
+    'MAIL_MAILER'      => 'log',
+    'SCOUT_DRIVER'     => 'collection',
+    'MEILISEARCH_HOST' => '',
+],
+```
+
+`{{project}}`, `{{slug}}`, `{{branch}}`, `{{path}}` and `{{port.<name>}}` for any name in `ports` all interpolate. An unknown one is an error naming the variable it came from, not an empty string left in the file — `APP_URL=http://localhost:` fails much later, in a browser, with nothing to connect it back to the typo.
+
+**Generated once.** A worktree that already has the file keeps it, untouched. Re-entering a worktree is the normal way to resume an interrupted bootstrap, and a resume that reverted someone's debugging edits would be worse than no resume at all.
+
+**Copied, then upserted.** The main checkout's `.env` is the starting point, falling back to the worktree's own `.env.example` with a diagnostic. Each variable then replaces the assignment already in the file — where it stands, comment above it intact — or is appended under a `# added by laravel-worktree` line. Sail's installer does positional `str_replace` on the strings its stub happens to ship with, which silently does nothing on a customised `.env`: the file is written, the ports are not in it, and the second worktree collides with the first for no visible reason.
+
+`null` means a variable set to nothing (`MAIL_HOST=`), `true`/`false` are written as those words, and a value that needs quoting gets it, with `\`, `"` and `$` escaped so that phpdotenv and `source` read back the same string.
+
+### Every port Sail publishes
+
+Offset every host-side variable belonging to a service this worktree starts, give it a name in `ports`, and keep `port_stride` at least as large as that list.
+
+| Service | Host-side variable | Container port |
+| --- | --- | --- |
+| `laravel.test` | `APP_PORT` | 80 |
+| `laravel.test` | `VITE_PORT` | `VITE_PORT` — both sides |
+| `mysql`, `mariadb` | `FORWARD_DB_PORT` | 3306 |
+| `pgsql` | `FORWARD_DB_PORT` | 5432 |
+| `mongodb` | `FORWARD_MONGODB_PORT` | 27017 |
+| `redis` | `FORWARD_REDIS_PORT` | 6379 |
+| `valkey` | `FORWARD_VALKEY_PORT` | 6379 |
+| `memcached` | `FORWARD_MEMCACHED_PORT` | 11211 |
+| `meilisearch` | `FORWARD_MEILISEARCH_PORT` | 7700 |
+| `typesense` | `FORWARD_TYPESENSE_PORT` | 8108 |
+| `minio` | `FORWARD_MINIO_PORT`, `FORWARD_MINIO_CONSOLE_PORT` | 9000, 8900 |
+| `rustfs` | `FORWARD_RUSTFS_PORT`, `FORWARD_RUSTFS_CONSOLE_PORT` | 9000, 9001 |
+| `mailpit` | `FORWARD_MAILPIT_PORT`, `FORWARD_MAILPIT_DASHBOARD_PORT` | 1025, 8025 |
+| `rabbitmq` | `FORWARD_RABBITMQ_PORT`, `FORWARD_RABBITMQ_DASHBOARD_PORT` | 5672, 15672 |
+| `soketi` | `PUSHER_PORT`, `PUSHER_METRICS_PORT` | 6001, 9601 |
+| `selenium` | publishes nothing | — |
+
+The container port never moves, so anything the application dials over the Compose network — `DB_PORT`, `REDIS_PORT`, `MAIL_PORT`, `MEILISEARCH_HOST`, `AWS_ENDPOINT` — keeps its default. `VITE_PORT` is the exception that looks like the trap below and is not: Sail publishes `'${VITE_PORT:-5173}:${VITE_PORT:-5173}'`, and `laravel-vite-plugin` reads `VITE_PORT` for the dev server's own port, so both sides move together on purpose.
+
+### Two traps
+
+**A variable that is both the host side and the container-internal one.** `REVERB_PORT` is the host side of `'${REVERB_PORT}:8080'` in `compose.yaml` *and*, through `config/broadcasting.php`, the port the application dials at `reverb:<port>`. Offset it per worktree and the broadcaster points at a port nothing listens on: the realtime tests hang, with no error. `soketi` has the identical shape with `PUSHER_PORT`. Pin the inner value in `env`, remap the host side in the Compose overlay — which is why those two mechanisms are separate.
+
+**A service with a `depends_on` you did not account for.** Redis often has to be offset not because anything talks to it from the host, but because `reverb` pulls it in through its own `depends_on`, and it publishes `'${FORWARD_REDIS_PORT:-6379}:6379'` when it does. The second worktree to start reverb then dies on `Bind for :::6379 failed`. Every published port on every transitively started service needs an entry.
+
+### `APP_ENV`, and the file Sail actually reads
+
+```bash
+if [ -n "$APP_ENV" ] && [ -f ./.env."$APP_ENV" ]; then
+  source ./.env."$APP_ENV";
+elif [ -f ./.env ]; then
+  source ./.env;
+fi
+```
+
+That is `bin/sail`, and `LoadEnvironmentVariables` agrees with it. On a machine with `APP_ENV` exported, ports written into `.env` would be read by nobody the moment `.env.<APP_ENV>` exists — every worktree keeps the default ports and collides, with nothing on screen to explain why. So when `APP_ENV` is exported, `.env.<APP_ENV>` is the file generated, which also makes it exist, which settles that `-f` test for good. It is the shell's `APP_ENV` that decides, never the one a `.env` sets, so it is captured before any `.env` is read.
+
 ## Testing
 
 ```bash

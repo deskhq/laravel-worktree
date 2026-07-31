@@ -61,16 +61,92 @@ return [
     | Generated .env
     |--------------------------------------------------------------------------
     |
-    | Written into a new worktree's .env once, and never again — a resumed
-    | bootstrap must not revert someone's debugging edits. Values may use the
-    | {{port.*}}, {{project}}, {{slug}}, {{branch}} and {{path}} placeholders.
+    | Written into a new worktree once, and never again — a resumed bootstrap
+    | must not revert someone's debugging edits. A key the file already sets is
+    | replaced where it stands, comment above it intact; a key it does not set
+    | is appended. Values may use the {{port.*}}, {{project}}, {{slug}},
+    | {{branch}} and {{path}} placeholders, and an unknown one is an error
+    | naming it rather than an empty string left in the file.
     |
     | This is where a worktree's published ports get offset, and where the
     | services it never starts get pointed away from:
     |
-    |     'APP_PORT'             => '{{port.app}}',
-    |     'COMPOSE_PROJECT_NAME' => '{{project}}',
-    |     'MAIL_MAILER'          => 'log',
+    |     'env' => [
+    |         'APP_PORT'             => '{{port.app}}',
+    |         'VITE_PORT'            => '{{port.vite}}',
+    |         'FORWARD_DB_PORT'      => '{{port.db}}',
+    |         'FORWARD_REDIS_PORT'   => '{{port.redis}}',
+    |         'COMPOSE_PROJECT_NAME' => '{{project}}',
+    |         'APP_URL'              => 'http://localhost:{{port.app}}',
+    |
+    |         // container-internal, deliberately NOT offset — see below
+    |         'REVERB_PORT' => 8080,
+    |
+    |         // point away from services this worktree never starts
+    |         'COMPOSE_PROFILES' => '',
+    |         'MAIL_MAILER'      => 'log',
+    |         'MAIL_HOST'        => '',
+    |         'SCOUT_DRIVER'     => 'collection',
+    |         'MEILISEARCH_HOST' => '',
+    |         'LDAP_HOST'        => '',
+    |     ],
+    |
+    | Every service Sail can start, and the host-side variable each publishes
+    | on. These are host sides only: offset every one belonging to a service
+    | this worktree starts, name a port for it in `ports` above, and keep
+    | `port_stride` at least as large as that list.
+    |
+    |     laravel.test  APP_PORT (80), VITE_PORT (both sides — see below)
+    |     mysql         FORWARD_DB_PORT (3306)
+    |     mariadb       FORWARD_DB_PORT (3306)
+    |     pgsql         FORWARD_DB_PORT (5432)
+    |     mongodb       FORWARD_MONGODB_PORT (27017)
+    |     redis         FORWARD_REDIS_PORT (6379)
+    |     valkey        FORWARD_VALKEY_PORT (6379)
+    |     memcached     FORWARD_MEMCACHED_PORT (11211)
+    |     meilisearch   FORWARD_MEILISEARCH_PORT (7700)
+    |     typesense     FORWARD_TYPESENSE_PORT (8108)
+    |     minio         FORWARD_MINIO_PORT (9000), FORWARD_MINIO_CONSOLE_PORT (8900)
+    |     rustfs        FORWARD_RUSTFS_PORT (9000), FORWARD_RUSTFS_CONSOLE_PORT (9001)
+    |     mailpit       FORWARD_MAILPIT_PORT (1025), FORWARD_MAILPIT_DASHBOARD_PORT (8025)
+    |     rabbitmq      FORWARD_RABBITMQ_PORT (5672), FORWARD_RABBITMQ_DASHBOARD_PORT (15672)
+    |     soketi        PUSHER_PORT (6001), PUSHER_METRICS_PORT (9601) — see below
+    |     selenium      publishes nothing
+    |
+    | The number in brackets is the container-internal port, which never moves.
+    | Anything the application dials over the Compose network — DB_PORT,
+    | REDIS_PORT, MAIL_PORT, MEILISEARCH_HOST, AWS_ENDPOINT — is that inner
+    | port, and offsetting it points the application at nothing.
+    |
+    | VITE_PORT is the exception that looks like the trap below and is not:
+    | Sail publishes '${VITE_PORT:-5173}:${VITE_PORT:-5173}', the same variable
+    | on both sides, and laravel-vite-plugin reads VITE_PORT for the dev
+    | server's own port — so both sides move together, on purpose.
+    |
+    | ## Trap 1: a variable that is both the host side and the inner one
+    |
+    | Reverb is the usual case. REVERB_PORT is the host side of
+    | '${REVERB_PORT}:8080' in compose.yaml *and*, through
+    | config/broadcasting.php, the port the application dials at reverb:<port>.
+    | Offset it per worktree and the broadcaster is pointed at a port nothing
+    | listens on: the realtime tests hang, with no error to explain it. Soketi
+    | has the identical shape with PUSHER_PORT.
+    |
+    | The fix is to pin the inner value here and remap the host side in the
+    | compose overlay below — which is the reason those two mechanisms are
+    | separate:
+    |
+    |     'env'     => ['REVERB_PORT' => 8080],
+    |     'compose' => ['port_overrides' => ['reverb' => ['{{port.reverb}}:8080']]],
+    |
+    | ## Trap 2: a service with a depends_on you did not account for
+    |
+    | A service can be started by something other than the application. Redis
+    | often has to be offset not because anything talks to it from the host,
+    | but because reverb pulls it in through its own depends_on, and it
+    | publishes '${FORWARD_REDIS_PORT:-6379}:6379' when it does. The second
+    | worktree to start reverb then dies on `Bind for :::6379 failed`. Every
+    | published port on every transitively started service needs an entry here.
     |
     */
 
