@@ -4,23 +4,38 @@
 /**
  * Host entry point for deskhq/laravel-worktree.
  *
- * This binary runs on the host, outside of any container and without booting
- * Laravel, because git worktrees, host ports and the sibling worktrees
- * directory are all unreachable from inside the application container.
- *
- * The command implementations land in later issues; for now this stub only
- * prints its usage.
+ * This binary is the real implementation, and it runs on the host: git
+ * worktrees, host ports and the sibling worktrees directory are all unreachable
+ * from inside the application container, so `php artisan worktree:*` is only a
+ * facade standing in front of it (see src/Commands). Laravel is never booted —
+ * nothing here depends on an application that may not be installed yet, or may
+ * be broken.
  */
-$usage = <<<'USAGE'
-worktree — per-worktree isolation for Laravel projects
 
-Usage:
-  worktree <command> [options]
+use DeskHQ\LaravelWorktree\Console\Application;
 
-Commands are not implemented yet.
+$autoloaders = [
+    // Installed as a dependency: vendor/deskhq/laravel-worktree/bin/worktree.
+    __DIR__.'/../../../autoload.php',
+    // Developing the package itself.
+    __DIR__.'/../vendor/autoload.php',
+];
 
-USAGE;
+$loaded = false;
 
-fwrite(STDERR, $usage);
+foreach ($autoloaders as $autoloader) {
+    if (file_exists($autoloader)) {
+        require $autoloader;
+        $loaded = true;
 
-exit(64);
+        break;
+    }
+}
+
+if (! $loaded) {
+    fwrite(STDERR, "error: could not find the Composer autoloader; run 'composer install'\n");
+
+    exit(1);
+}
+
+exit(Application::create()->run($argv));
