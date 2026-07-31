@@ -140,6 +140,8 @@ it('refuses a config it cannot act on', function (array $config, string $message
     'more ports than the stride can hold' => [['port_stride' => 2], 'ports names 5 ports but port_stride is 2; neighbouring slots would overlap'],
     'a port named twice' => [['ports' => ['app', 'app']], "ports names 'app' twice; each port takes its own offset within a slot"],
     'a repo slug Docker would reject' => [['repo_slug' => 'The Desk'], "repo_slug must be a valid Compose project name ([a-z0-9][a-z0-9_-]*), 'The Desk' given"],
+    'an env key no shell could assign' => [['env' => ['MAIL HOST' => '']], "env keys must be variable names; 'MAIL HOST' is not one"],
+    'an env value that is not a scalar' => [['env' => ['MAIL_HOST' => ['smtp']]], 'env.MAIL_HOST must be a scalar or null, array given'],
     'a step that runs nothing' => [['steps' => [['label' => 'Nothing']]], 'steps.0 runs nothing; give it one of host, sail, sail_root'],
     'a step that runs two things' => [['steps' => [['host' => 'true', 'sail' => 'true']]], 'steps.0 names host and sail, but a step runs one command; use one of host, sail, sail_root'],
     'a condition the DSL cannot express' => [['steps' => [['host' => 'true', 'when' => 'shell_fails:probe']]], "steps.0.when must be one of missing:, exists:, env_empty:, 'shell_fails:probe' given"],

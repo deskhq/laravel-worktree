@@ -204,7 +204,9 @@ final readonly class Schema
         $variables = [];
 
         foreach ($value as $name => $entry) {
-            if (! is_string($name) || $name === '') {
+            // A name a shell cannot assign is caught here rather than written
+            // into a `.env` that then fails to parse, in a container, later.
+            if (! is_string($name) || preg_match('/\A[A-Za-z_][A-Za-z0-9_]*\z/', $name) !== 1) {
                 throw self::error('env keys must be variable names; '.self::describe($name).' is not one');
             }
 
