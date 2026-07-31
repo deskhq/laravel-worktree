@@ -25,7 +25,7 @@ it('releases every held lock when the run is interrupted', function () {
 
     $process = interruptedRunHolding($lock, SIGINT);
 
-    expect($process->getExitCode())->toBe(130)
+    expect($process)->toHaveExited(130)
         ->and(is_dir($lock))->toBeFalse();
 
     deleteDirectory(dirname($lock));
@@ -36,7 +36,7 @@ it('releases every held lock when the run is terminated', function () {
 
     $process = interruptedRunHolding($lock, SIGTERM);
 
-    expect($process->getExitCode())->toBe(143)
+    expect($process)->toHaveExited(143)
         ->and(is_dir($lock))->toBeFalse();
 
     deleteDirectory(dirname($lock));

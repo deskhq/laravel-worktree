@@ -608,7 +608,34 @@ Both are exotic, and covering them would mean adding `always:` and `when: shell_
 
 ```bash
 composer test
+vendor/bin/pest --parallel
 ```
+
+**No Docker in the suite.** Nothing here requires a daemon: it runs on a laptop
+with Docker Desktop closed, and CI stops the daemon before running it. Every
+Docker interaction is asserted through a fake binary that records its argv and
+replays canned output, which is what makes the properties worth asserting
+observable at all — one `docker rm` per resource, survivors re-queried after a
+teardown, `--dry-run` reaching no destructive call. A case that declares no fake
+of its own gets one that refuses loudly rather than falling through to whatever
+`docker` is on `PATH`.
+
+**Real git, everywhere it matters.** The half that cannot be faked usefully: an
+upstream carrying `master` and `develop`, cloned so the clone knows `develop`
+only as `remotes/origin/develop`, with `develop` carrying a commit `master` does
+not — so a fork from the wrong base is caught by SHA rather than only by branch
+name. That is the regression suite for the-desk#619 and the-desk#639 — see
+[What a worktree forks from](#what-a-worktree-forks-from) — and it fails if
+either fix is reverted.
+
+**`$HOME` is pinned per case.** Everything shared between runs — the registry,
+the global lock directory, the per-key locks — hangs off `$HOME`, so pinning it
+is what keeps parallel cases out of each other's state and any case at all out
+of your real `~/.laravel-worktree`.
+
+**Failures carry stderr.** Every diagnostic this tool emits goes to stderr, and
+asserting on the exit code alone throws all of it away, so
+`expect($process)->toHaveSucceeded()` reports what the run actually said.
 
 ## Changelog
 

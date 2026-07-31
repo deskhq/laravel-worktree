@@ -66,5 +66,19 @@ jobs:
       - name: List Installed Dependencies
         run: composer show -D
 
+      # Nothing in this suite may need a daemon: every Docker interaction is
+      # asserted through a fake binary that records its argv and replays canned
+      # output, so the suite runs on a laptop with Docker Desktop closed. A
+      # runner with the daemon up would not prove that.
+      - name: Stop the Docker daemon
+        run: |
+          sudo systemctl stop docker.socket docker.service
+          ! docker info > /dev/null 2>&1
+
       - name: Execute tests
         run: vendor/bin/pest --ci
+
+      # Again with a process per file, which is the order that catches a case
+      # depending on state — or on a helper — another file left behind.
+      - name: Execute tests in parallel
+        run: vendor/bin/pest --ci --parallel

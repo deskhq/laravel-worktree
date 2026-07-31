@@ -12,7 +12,7 @@ it('keeps stdout to one line through a step that writes to its own stdout', func
     $process->setTimeout(60);
     $process->run();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getOutput())->toBe("/Users/agent/project-worktrees/441-fix-login\n")
         ->and($process->getErrorOutput())
         ->toContain('creating worktree')

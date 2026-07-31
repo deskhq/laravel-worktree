@@ -33,7 +33,7 @@ it('reads the shipped config in a process with only the package autoloaded', fun
     $process = readsConfiguration(packagePath(), isolated: true);
 
     expect($process->getErrorOutput())->toBe('')
-        ->and($process->getExitCode())->toBe(0)
+        ->and($process)->toHaveSucceeded()
         ->and(json_decode($process->getOutput(), true))->toMatchArray(['slots' => 50, 'portBase' => 20000]);
 });
 
@@ -42,7 +42,7 @@ it('refuses a config that reaches for the application', function (string $body, 
 
     $process = readsConfiguration($root, isolated: true);
 
-    expect($process->getExitCode())->toBe(1)
+    expect($process)->toHaveExited(1)
         ->and($process->getErrorOutput())
         ->toContain($named)
         ->toContain('it runs on the host with no application booted')

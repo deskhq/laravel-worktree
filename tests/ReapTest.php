@@ -2,7 +2,6 @@
 
 use DeskHQ\LaravelWorktree\Console\Confirmation;
 use DeskHQ\LaravelWorktree\Console\Output;
-use Symfony\Component\Process\Process;
 
 /**
  * `reap`, end to end through the real binary: a real repository, a real registry
@@ -16,14 +15,12 @@ use Symfony\Component\Process\Process;
  * confirm on exits non-zero having destroyed nothing.
  */
 beforeEach(function () {
-    $this->root = temporaryDirectory('worktree-reap');
-    $this->home = $this->root.'/home';
+    harness('worktree-reap');
+
     $this->main = $this->root.'/desk';
     $this->shop = $this->root.'/shop';
-    $this->docker = fakeDockerBinary($this->root);
 
     mkdir($this->main, 0755, true);
-    mkdir($this->home, 0755, true);
 
     runGit($this->main, 'init', '--quiet', '--initial-branch=main', '.');
 });
@@ -40,7 +37,7 @@ it('destroys the projects nothing claims, one Compose teardown and one label swe
 
     $process = worktreeReap(['--yes']);
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         // Nothing machine-readable happens here either: the exit code is the
         // answer, and the manifest is a diagnostic like every other one.
         ->and($process->getOutput())->toBe('')
@@ -73,7 +70,7 @@ it('never touches a project without the wt- marker, whatever it is called', func
 
     $process = worktreeReap(['--yes', '--all']);
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getErrorOutput())
         ->toContain('found 1 orphaned project on this machine:')
         ->not->toContain('app-441')
@@ -93,7 +90,7 @@ it('leaves another repository\'s projects alone until --all says otherwise', fun
 
     $scoped = worktreeReap(['--yes']);
 
-    expect($scoped->getExitCode())->toBe(0)
+    expect($scoped)->toHaveSucceeded()
         ->and($scoped->getErrorOutput())
         ->toContain('found 1 orphaned project for desk:')
         ->not->toContain('wt-shop-feat-checkout')
@@ -103,7 +100,7 @@ it('leaves another repository\'s projects alone until --all says otherwise', fun
 
     $everywhere = worktreeReap(['--yes', '--all']);
 
-    expect($everywhere->getExitCode())->toBe(0)
+    expect($everywhere)->toHaveSucceeded()
         ->and($everywhere->getErrorOutput())->toContain('reaped 1 project: wt-shop-feat-checkout')
         ->and(dockerCalls())->toContain('volume rm --force shop-pgsql');
 });
@@ -121,7 +118,7 @@ it('leaves a project the registry claims alone, whichever checkout claims it', f
 
     $process = worktreeReap(['--yes', '--all']);
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getErrorOutput())->toContain('nothing to reap: no project is on this daemon that no worktree claims')
         ->and(dockerCalls())->not->toContain('volume rm --force 441-pgsql')
         ->and(dockerCalls())->not->toContain('volume rm --force shop-pgsql');
@@ -145,7 +142,7 @@ it('skips a project that was claimed between the scan and the deletion', functio
 
     $process = worktreeReap(['--yes']);
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getErrorOutput())
         ->toContain('found 2 orphaned projects for desk:')
         ->toContain('skipping wt-desk-feat-checkout: a worktree claimed it after the scan')
@@ -164,7 +161,7 @@ it('reports under --dry-run without making a single destructive call', function 
 
     $process = worktreeReap(['--dry-run']);
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getErrorOutput())
         ->toContain('found 1 orphaned project for desk:')
         ->toContain('wt-desk-441-fix-login  1 container, 2 volumes')
@@ -183,7 +180,7 @@ it('reports under --dry-run without making a single destructive call', function 
 it('reports under --dry-run with no terminal and no --yes', function () {
     daemonHolds(['wt-desk-441-fix-login' => ['volumes' => ['441-pgsql']]]);
 
-    expect(worktreeReap(['--dry-run'])->getExitCode())->toBe(0)
+    expect(worktreeReap(['--dry-run']))->toHaveSucceeded()
         ->and(destructiveCalls())->toBe([]);
 });
 
@@ -192,7 +189,7 @@ it('refuses to destroy anything with no terminal to confirm on and no --yes', fu
 
     $process = worktreeReap();
 
-    expect($process->getExitCode())->toBe(1)
+    expect($process)->toHaveExited(1)
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())
         // Named first, so the run that refuses still tells you what is there.
@@ -207,7 +204,7 @@ it('exits non-zero naming a volume that could not be removed', function () {
 
     $process = worktreeReap(['--yes']);
 
-    expect($process->getExitCode())->toBe(1)
+    expect($process)->toHaveExited(1)
         ->and($process->getErrorOutput())
         ->toContain('wt-desk-441-fix-login survived teardown')
         ->toContain('1 volume (441-pgsql)')
@@ -219,7 +216,7 @@ it('exits non-zero naming a volume that could not be removed', function () {
 it('treats nothing to reap as a clean run rather than an error', function () {
     $process = worktreeReap(['--yes']);
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())->toContain('nothing to reap: no project of desk is on this daemon that no worktree claims');
 });
@@ -236,7 +233,7 @@ it('says the daemon could not be asked rather than reporting a clean machine', f
 
     $process = worktreeReap(['--yes']);
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getErrorOutput())
         ->toContain('there is no Docker daemon answering on this machine, so nothing could be scanned for')
         ->toContain('nothing here says the disk is clean')
@@ -247,7 +244,7 @@ it('says the daemon could not be asked rather than reporting a clean machine', f
 it('treats being called wrong as a usage error, not a failed run', function (array $arguments, string $said) {
     $process = worktreeReap($arguments);
 
-    expect($process->getExitCode())->toBe(64)
+    expect($process)->toHaveExited(64)
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())
         ->toContain($said)
@@ -290,32 +287,6 @@ it('knows a pipe is not somebody to ask', function () {
 
     expect((new Confirmation(new Output(fopen('php://memory', 'w+')), $input))->isInteractive())->toBeFalse();
 });
-
-/**
- * A finished `reap`, run from the main checkout against the test's own registry
- * and the test's own daemon.
- *
- * @param  list<string>  $arguments
- */
-function worktreeReap(array $arguments = []): Process
-{
-    $process = new Process(
-        [PHP_BINARY, packagePath('bin/worktree'), 'reap', ...$arguments],
-        test()->main,
-        [
-            'WORKTREE_HOME' => test()->home,
-            'SAIL_DOCKER_BINARY' => test()->docker,
-            // See CreateTest: Testbench exports APP_ENV=testing, and this suite
-            // is about the ordinary `.env` rather than `.env.testing`.
-            'APP_ENV' => false,
-        ],
-    );
-
-    $process->setTimeout(60);
-    $process->run();
-
-    return $process;
-}
 
 /**
  * What this daemon is holding, project by project.

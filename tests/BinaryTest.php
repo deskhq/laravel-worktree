@@ -13,7 +13,7 @@ it('registers the binary composer installs into vendor/bin', function () {
 it('prints its usage on stderr and exits with EX_USAGE when given no command', function () {
     $process = worktree();
 
-    expect($process->getExitCode())->toBe(64)
+    expect($process)->toHaveExited(64)
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())->toContain('Usage:')
         ->and($process->getErrorOutput())->toContain('create');
@@ -22,7 +22,7 @@ it('prints its usage on stderr and exits with EX_USAGE when given no command', f
 it('treats an explicit request for help as a success', function () {
     $process = worktree(['--help']);
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())->toContain('Usage:');
 });
@@ -30,7 +30,7 @@ it('treats an explicit request for help as a success', function () {
 it('rejects an unknown command as a usage error', function () {
     $process = worktree(['destroy']);
 
-    expect($process->getExitCode())->toBe(64)
+    expect($process)->toHaveExited(64)
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())->toContain('error: unknown command: destroy');
 });
@@ -48,7 +48,7 @@ it('lists every command it dispatches, with what each one takes', function () {
 it('refuses to run inside the container and creates nothing', function () {
     $process = worktree(['create', '441'], env: ['LARAVEL_SAIL' => '1']);
 
-    expect($process->getExitCode())->not->toBe(0)
+    expect($process)->toHaveFailed()
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())
         ->toContain('worktree must run on the host, not inside the container.')
@@ -60,7 +60,7 @@ it('fails clearly when it is not run inside a git repository', function () {
 
     $process = worktree(['create', '441'], cwd: $directory);
 
-    expect($process->getExitCode())->toBe(1)
+    expect($process)->toHaveExited(1)
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())->toContain('error: not inside a git repository');
 

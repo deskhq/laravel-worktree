@@ -1,7 +1,5 @@
 <?php
 
-use Symfony\Component\Process\Process;
-
 /**
  * `remove`, end to end through the real binary, against a worktree a real
  * `create` made: real git, a real registry on disk, real locks, and the suite's
@@ -13,21 +11,12 @@ use Symfony\Component\Process\Process;
  * (the-desk#1095).
  */
 beforeEach(function () {
-    $this->root = temporaryDirectory('worktree-remove');
-    $this->home = $this->root.'/home';
-    $this->main = $this->root.'/desk';
+    harness('worktree-remove');
+
+    $this->main = mainCheckout($this->root.'/desk');
     $this->worktree = $this->root.'/desk-worktrees/feat-checkout';
     $this->gate = $this->root.'/gate';
     $this->base = freePortBase(100);
-    $this->docker = fakeDockerBinary($this->root);
-
-    mkdir($this->main, 0755, true);
-
-    runGit($this->main, 'init', '--quiet', '--initial-branch=main', '.');
-    file_put_contents($this->main.'/compose.yaml', "services:\n  laravel.test:\n    image: laravel\n");
-    runGit($this->main, 'add', '-A');
-    runGit($this->main, 'commit', '--quiet', '-m', 'initial');
-    file_put_contents($this->main.'/.env', "APP_NAME=Desk\nAPP_KEY=\n");
 
     configureRepository();
 });
@@ -46,7 +35,7 @@ it('takes the project, the directory and the slot, and leaves the branch', funct
 
     $process = worktreeRemove();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         // Nothing machine-readable happens here: the exit code is the answer.
         ->and($process->getOutput())->toBe('')
         ->and(dockerCalls())
@@ -77,7 +66,7 @@ it('works with no registry entry, deriving both facts from the name and saying s
 
     $process = worktreeRemove();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getErrorOutput())
         ->toContain('nothing in the registry holds wt-desk-feat-checkout, so this run goes by the name it was given')
         ->toContain('the worktree at '.$this->worktree)
@@ -103,7 +92,7 @@ it('globs the sibling worktrees directories for a directory the derived path no 
 
     $process = worktreeRemove();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getErrorOutput())
         ->toContain('there is no worktree at '.$this->root.'/the-desk-worktrees/feat-checkout')
         ->toContain("git has one of this repository's at ".$this->worktree)
@@ -128,7 +117,7 @@ it('exits non-zero over what survived the teardown, and frees the slot regardles
 
     $process = worktreeRemove();
 
-    expect($process->getExitCode())->toBe(1)
+    expect($process)->toHaveExited(1)
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())
         ->toContain('wt-desk-feat-checkout survived teardown')
@@ -138,7 +127,7 @@ it('exits non-zero over what survived the teardown, and frees the slot regardles
         ->and(registryNow())->toBe([]);
 
     // And the slot is not merely unclaimed but usable: the next create takes it.
-    expect(worktreeCreate()->getExitCode())->toBe(0)
+    expect(worktreeCreate())->toHaveSucceeded()
         ->and(registryNow()['wt-desk-feat-checkout']['slot'])->toBe(0);
 });
 
@@ -154,7 +143,7 @@ it('will not call a removal clean when there was no daemon to confirm it', funct
 
     $process = worktreeRemove();
 
-    expect($process->getExitCode())->toBe(1)
+    expect($process)->toHaveExited(1)
         ->and($process->getErrorOutput())
         ->toContain('could not confirm that wt-desk-feat-checkout is gone')
         ->toContain("'worktree reap' is the way back to them")
@@ -171,7 +160,7 @@ it('does not fail over a worktree directory somebody already deleted by hand', f
 
     $process = worktreeRemove();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and(registryNow())->toBe([])
         ->and(branchesOfMain())->toContain('feat/checkout')
         // git's record went with it, or the next `git worktree add` would be
@@ -180,7 +169,7 @@ it('does not fail over a worktree directory somebody already deleted by hand', f
 });
 
 it('makes a remove wait for a create of the same worktree rather than interleaving with it', function () {
-    configureRepository(['steps' => [waitingStep()]]);
+    configureRepository(['steps' => [gatedStep()]]);
 
     $create = startWorktreeCreate();
     waitForOutput($create, '[1/1] Waiting', stderr: true);
@@ -197,8 +186,8 @@ it('makes a remove wait for a create of the same worktree rather than interleavi
 
     touch($this->gate);
 
-    expect($create->wait())->toBe(0)
-        ->and($remove->wait())->toBe(0)
+    expect($create->wait())->toBe(0, worktreeFailure($create))
+        ->and($remove->wait())->toBe(0, worktreeFailure($remove))
         ->and(registryNow())->toBe([])
         ->and($this->worktree)->not->toBeDirectory();
 });
@@ -218,7 +207,7 @@ it('refuses to remove a project registered to another checkout', function () {
 
     $process = worktreeRemove();
 
-    expect($process->getExitCode())->toBe(1)
+    expect($process)->toHaveExited(1)
         ->and($process->getErrorOutput())
         ->toContain('is registered to '.$this->root.'/shop, not to '.$this->main)
         // And nothing was torn down on the way to refusing.
@@ -229,7 +218,7 @@ it('refuses to remove a project registered to another checkout', function () {
 it('treats being called wrong as a usage error, not a failed run', function (array $arguments, string $said) {
     $process = worktreeRemove($arguments);
 
-    expect($process->getExitCode())->toBe(64)
+    expect($process)->toHaveExited(64)
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())
         ->toContain($said)
@@ -240,105 +229,6 @@ it('treats being called wrong as a usage error, not a failed run', function (arr
     'more than a name' => [['feat/checkout', 'extra'], 'remove takes one name; given feat/checkout extra'],
     'an option it does not have' => [['feat/checkout', '--force'], "this command takes no options, and '--force' is one"],
 ]);
-
-/**
- * The repository's `config/worktree.php`, as these cases need it.
- *
- * @param  array<string, mixed>  $config
- */
-function configureRepository(array $config = []): void
-{
-    $config = array_replace([
-        'slots' => 5,
-        // A window this machine has free right now, so a real service on the
-        // developer's laptop cannot decide which slot the test gets.
-        'port_base' => test()->base,
-        'env' => [
-            'APP_PORT' => '{{port.app}}',
-            'COMPOSE_PROJECT_NAME' => '{{project}}',
-        ],
-        'steps' => [],
-    ], $config);
-
-    is_dir(test()->main.'/config') || mkdir(test()->main.'/config', 0755, true);
-
-    file_put_contents(test()->main.'/config/worktree.php', '<?php return '.var_export($config, true).";\n");
-}
-
-/**
- * A step that sits in the pipeline until the example lets it go — a stand-in
- * for the minutes of Composer, npm and image pulls a `remove` would otherwise
- * be free to run straight through the middle of.
- *
- * @return array<string, string>
- */
-function waitingStep(): array
-{
-    return ['label' => 'Waiting', 'host' => 'until [ -f '.test()->gate.' ]; do sleep 0.1; done'];
-}
-
-/**
- * @param  list<string>  $arguments
- */
-function worktreeRemove(array $arguments = ['feat/checkout']): Process
-{
-    $process = startWorktreeRemove($arguments);
-    $process->wait();
-
-    return $process;
-}
-
-/**
- * @param  list<string>  $arguments
- */
-function startWorktreeRemove(array $arguments = ['feat/checkout']): Process
-{
-    return startWorktreeBinary('remove', $arguments);
-}
-
-/**
- * The worktree these cases remove, made the way a person makes one.
- *
- * @param  list<string>  $arguments
- */
-function worktreeCreate(array $arguments = ['feat/checkout']): Process
-{
-    $process = startWorktreeCreate($arguments);
-    $process->wait();
-
-    return $process;
-}
-
-/**
- * @param  list<string>  $arguments
- */
-function startWorktreeCreate(array $arguments = ['feat/checkout']): Process
-{
-    return startWorktreeBinary('create', $arguments);
-}
-
-/**
- * @param  list<string>  $arguments
- */
-function startWorktreeBinary(string $command, array $arguments): Process
-{
-    $process = new Process(
-        [PHP_BINARY, packagePath('bin/worktree'), $command, ...$arguments],
-        test()->main,
-        [
-            'WORKTREE_HOME' => test()->home,
-            'SAIL_DOCKER_BINARY' => test()->docker,
-            // See CreateTest: Testbench exports APP_ENV=testing, and both
-            // `bin/sail` and Laravel then prefer `.env.testing`.
-            'APP_ENV' => false,
-        ],
-    );
-
-    $process->setTimeout(120);
-    $process->start();
-
-    return $process;
-}
 
 /**
  * The registry as this machine now holds it.

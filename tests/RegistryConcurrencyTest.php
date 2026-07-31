@@ -12,6 +12,8 @@ beforeEach(function () {
     $this->home = temporaryDirectory('worktree-home');
     $this->gate = temporaryDirectory('worktree-gate').'/go';
     $this->base = freePortBase(100);
+
+    pinHome($this->home);
 });
 
 afterEach(function () {
@@ -33,8 +35,8 @@ it('gives two worktrees claiming at once different slots and port blocks', funct
 
     touch($this->gate);
 
-    expect($first->wait())->toBe(0)
-        ->and($second->wait())->toBe(0);
+    expect($first->wait())->toBe(0, worktreeFailure($first))
+        ->and($second->wait())->toBe(0, worktreeFailure($second));
 });
 
 it('gives two clones of the same repository different slots', function () {
@@ -48,8 +50,8 @@ it('gives two clones of the same repository different slots', function () {
 
     touch($this->gate);
 
-    expect($first->wait())->toBe(0)
-        ->and($second->wait())->toBe(0);
+    expect($first->wait())->toBe(0, worktreeFailure($first))
+        ->and($second->wait())->toBe(0, worktreeFailure($second));
 });
 
 it('makes a second run for the same worktree wait, then re-enters the same slot', function () {
@@ -68,8 +70,8 @@ it('makes a second run for the same worktree wait, then re-enters the same slot'
 
     touch($this->gate);
 
-    expect($first->wait())->toBe(0)
-        ->and($second->wait())->toBe(0)
+    expect($first->wait())->toBe(0, worktreeFailure($first))
+        ->and($second->wait())->toBe(0, worktreeFailure($second))
         ->and(claimOf($second))->toBe($claimed);
 });
 
@@ -82,7 +84,7 @@ it('leaves no lock behind when a run is interrupted in the middle of its work', 
     $run->signal(SIGINT);
     $run->wait();
 
-    expect($run->getExitCode())->toBe(130)
+    expect($run)->toHaveExited(130)
         ->and($this->home.'/locks/wt-desk-441.lock')->not->toBeDirectory()
         ->and($this->home.'/registry.lock')->not->toBeDirectory()
         ->and(entriesIn($this->home))->toHaveKey('wt-desk-441');
@@ -119,7 +121,7 @@ it('never leaves the registry half-written for a concurrent reader', function ()
     }
 
     foreach ($writers as $writer) {
-        expect($writer->wait())->toBe(0);
+        expect($writer->wait())->toBe(0, worktreeFailure($writer));
     }
 
     // Atomic within the filesystem: the temporary file is written in the
@@ -141,7 +143,7 @@ it('writes without going through the system temp directory', function () {
 
     $writer = writesTheRegistry($this, 'alpha', 5, ['TMPDIR' => $elsewhere]);
 
-    expect($writer->wait())->toBe(0)
+    expect($writer->wait())->toBe(0, worktreeFailure($writer))
         ->and(entriesIn($this->home))->toHaveCount(5)
         ->and(array_diff((array) scandir($elsewhere), ['.', '..']))->toBe([]);
 
@@ -161,7 +163,7 @@ function claimsASlot(object $test, string $repo, string $key): Process
     $process = new Process(
         [PHP_BINARY, packagePath('tests/Fixtures/claims-a-slot.php'), $repo, $key, $test->gate],
         null,
-        ['WORKTREE_HOME' => $test->home, 'WORKTREE_PORT_BASE' => (string) $test->base],
+        worktreeEnvironment(['WORKTREE_PORT_BASE' => (string) $test->base]),
     );
 
     $process->setTimeout(60);
@@ -171,14 +173,14 @@ function claimsASlot(object $test, string $repo, string $key): Process
 }
 
 /**
- * @param  array<string, string>  $environment
+ * @param  array<string, string|false>  $environment
  */
 function writesTheRegistry(object $test, string $prefix, int $count, array $environment = []): Process
 {
     $process = new Process(
         [PHP_BINARY, packagePath('tests/Fixtures/writes-the-registry.php'), $prefix, (string) $count],
         null,
-        ['WORKTREE_HOME' => $test->home, 'WORKTREE_PORT_BASE' => (string) $test->base] + $environment,
+        worktreeEnvironment(['WORKTREE_PORT_BASE' => (string) $test->base, ...$environment]),
     );
 
     $process->setTimeout(60);
