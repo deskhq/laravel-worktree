@@ -35,13 +35,19 @@ interface Runtime
     public function boot(Identity $worktree, string $environmentFile): void;
 
     /**
-     * Take the worktree's runtime off this machine, and report what is left.
+     * Take a project off this machine, and report what is left.
+     *
+     * A project name rather than an {@see Identity}, because `reap` has nothing
+     * else: an orphan is a label on a daemon, and the worktree it belonged to
+     * may have no entry, no branch and no directory left anywhere. $directory is
+     * the worktree when there still is one, and is only ever an optimisation —
+     * see {@see SailRuntime::teardown()} for what Compose does with it.
      *
      * Never throws over a resource it could not remove: the survivors are the
      * answer, and the caller — `remove`, `reap` — is what turns them into an
      * exit code.
      */
-    public function teardown(Identity $worktree): TeardownResult;
+    public function teardown(string $project, ?string $directory = null): TeardownResult;
 
     /**
      * Whether worktrees under this runtime need a slot's worth of host ports.

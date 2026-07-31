@@ -390,11 +390,3 @@ function worktreesGitKnows(): array
 
     return $paths;
 }
-
-/**
- * @return list<string>
- */
-function dockerCalls(): array
-{
-    return recorded(test()->root.'/fake/log');
-}

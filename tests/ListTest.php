@@ -237,52 +237,6 @@ function worktreeList(array $arguments = [], array $env = []): Process
 }
 
 /**
- * The registry as this machine holds it.
- *
- * Written rather than created by `create`: what `list` reads is a file, and a
- * case that had to bootstrap five worktrees to show five rows would be testing
- * `create` again.
- *
- * @param  array<string, array<string, mixed>>  $entries
- */
-function registryHolds(array $entries): void
-{
-    file_put_contents(
-        test()->home.'/registry.json',
-        json_encode($entries === [] ? new stdClass : $entries, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n",
-    );
-}
-
-/**
- * One entry, as an earlier `create` would have written it.
- *
- * @param  array<string, int>|null  $ports
- * @return array<string, mixed>
- */
-function slotEntry(int $slot, string $slug, ?string $repo = null, ?string $branch = null, ?array $ports = null): array
-{
-    $repo ??= test()->main;
-
-    if ($ports === null) {
-        $ports = [];
-
-        foreach (['app', 'vite', 'reverb', 'db', 'redis'] as $index => $name) {
-            $ports[$name] = 20000 + $slot * 10 + $index;
-        }
-    }
-
-    return [
-        'slot' => $slot,
-        'repo' => $repo,
-        'slug' => $slug,
-        'branch' => $branch ?? $slug,
-        'path' => $repo.'-worktrees/'.$slug,
-        'ports' => $ports,
-        'created_at' => '2026-01-01T00:00:00Z',
-    ];
-}
-
-/**
  * @return list<string> Everything the run put on stdout, line by line.
  */
 function rowsOf(Process $process): array

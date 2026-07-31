@@ -40,18 +40,19 @@ it('reports the containerised refusal for every command', function (string $comm
 ]);
 
 /**
- * A command the roadmap has not built yet, deliberately: this asserts that the
- * facade reaches the binary and hands back what it said, and `create` reaching
- * it would build a worktree of this repository on the machine running the suite
- * — while `list` would read the developer's own registry, and `remove` would
- * tear down whatever it found there.
+ * A call the binary refuses before it touches anything, deliberately: this
+ * asserts that the facade reaches the binary and hands back what it said, and
+ * every command that got as far as doing its work would do it to the machine
+ * running the suite — `create` would build a worktree of this repository,
+ * `list` would read the developer's own registry, and `remove` and `reap`
+ * would tear down whatever they found in it.
  */
-it('delegates to the host binary when it is on the host', function () {
+it('delegates to the host binary when it is on the host, and hands back its exit code', function () {
     pretendToBeContainerised(false);
 
-    $this->artisan('worktree:reap')
-        ->expectsOutputToContain('reap is not implemented yet')
-        ->assertExitCode(1);
+    $this->artisan('worktree:reap', ['arguments' => ['441']])
+        ->expectsOutputToContain('reap takes no arguments, only options; given 441')
+        ->assertExitCode(64);
 });
 
 /**
@@ -70,4 +71,5 @@ it('forwards the flags the host binary understands', function (string $command, 
 })->with([
     ['worktree:create', ['arguments' => ['441'], '--refresh' => true, '--json' => true], 'create 441 --refresh --json'],
     ['worktree:list', ['--all' => true, '--json' => true], 'list --all --json'],
+    ['worktree:reap', ['--all' => true, '--dry-run' => true, '--yes' => true], 'reap --all --dry-run --yes'],
 ]);

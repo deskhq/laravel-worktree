@@ -122,7 +122,7 @@ it('runs `up` with Sail\'s own checks in place, and every step after it without 
 it('asks Compose to take the project down, then removes what survived, one call per resource', function () {
     $docker = fakeDockerBinary($this->root, containers: ['c1', 'c2'], volumes: ['wt-desk-441-fix-login_sail-pgsql', 'wt-desk-441-fix-login_sail-redis']);
 
-    $result = runtime($docker)->teardown($this->identity);
+    $result = runtime($docker)->teardown($this->identity->key, $this->identity->path);
 
     expect($result->succeeded())->toBeTrue()
         ->and($result->describe())->toContain('nothing on this machine carries its label any more')
@@ -157,7 +157,7 @@ it('names the volumes it could not remove instead of reporting a clean run', fun
         refuses: ['wt-desk-441-fix-login_sail-pgsql'],
     );
 
-    $result = runtime($docker)->teardown($this->identity);
+    $result = runtime($docker)->teardown($this->identity->key, $this->identity->path);
 
     expect($result->succeeded())->toBeFalse()
         ->and($result->containers)->toBe([])
@@ -178,7 +178,7 @@ it('shows what Compose said when its teardown failed, and sweeps up behind it an
         composeOutput: 'no configuration file provided: not found',
     );
 
-    $result = runtime($docker)->teardown($this->identity);
+    $result = runtime($docker)->teardown($this->identity->key, $this->identity->path);
 
     expect($result->succeeded())->toBeTrue()
         ->and(diagnosticsIn($this->diagnostics))
@@ -195,7 +195,7 @@ it('shows what Compose said when its teardown failed, and sweeps up behind it an
 it('refuses to call a teardown clean when there was no daemon to ask', function () {
     $docker = fakeDockerBinary($this->root, volumes: ['v1'], daemon: false);
 
-    $result = runtime($docker)->teardown($this->identity);
+    $result = runtime($docker)->teardown($this->identity->key, $this->identity->path);
 
     expect($result->succeeded())->toBeFalse()
         ->and($result->survivors())->toBe([])
@@ -216,14 +216,14 @@ it('answers a label query with nothing rather than throwing when there is no Doc
 it('falls back to the standalone Compose binary the way bin/sail does', function () {
     $docker = fakeDockerBinary($this->root, composeSubcommand: false);
 
-    runtime($docker)->teardown($this->identity);
+    runtime($docker)->teardown($this->identity->key, $this->identity->path);
 
     expect(dockerInvocations())->toContain('compose version')
         ->and(composeInvocations())->toBe(['-p wt-desk-441-fix-login down --volumes --remove-orphans']);
 });
 
 it('exports the WWWUSER and WWWGROUP that bin/sail exports and compose.yaml interpolates', function () {
-    runtime()->teardown($this->identity);
+    runtime()->teardown($this->identity->key, $this->identity->path);
 
     expect(trim((string) file_get_contents($this->root.'/fake/compose-env')))->toBe(HostUser::id().':'.HostUser::group());
 });

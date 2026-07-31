@@ -31,6 +31,7 @@ The binary is the implementation, and it runs on the host:
 cd "$(./vendor/bin/worktree create 441)"
 ./vendor/bin/worktree list
 ./vendor/bin/worktree remove 441
+./vendor/bin/worktree reap
 ```
 
 Only machine-readable output — the path from `create`, the table from `list` — reaches stdout. Every diagnostic, and the whole output of every subprocess it runs, goes to stderr, so `cd "$(...)"` keeps working on a run that also produced megabytes of Composer and npm output.
@@ -44,7 +45,7 @@ worktree must run on the host, not inside the container.
 Use:  ./vendor/bin/worktree create 441
 ```
 
-`reap` is not implemented yet; it lands with its own issue.
+`worktree:reap` is the one to run from the binary rather than through artisan when you want to be asked before anything is destroyed: the facade gives the binary pipes rather than your terminal, so a `reap` under it has nobody to confirm with and says so rather than assuming. `--yes` and `--dry-run` work either way.
 
 ## Creating, resuming and re-entering
 
@@ -172,6 +173,60 @@ nothing in the registry holds wt-the-desk-441-fix-login, so this run goes by the
 Refusing was the bug it fixes: a worktree somebody removed by hand — or one whose entry a *failed* teardown had already deleted — had no supported way to reclaim its volumes at all. Where the derived directory is not there, the sibling `*-worktrees` directories are globbed for one holding that slug, which is what a `repo_slug` set since the worktree was created leaves behind; a match is believed only once git confirms it is a worktree of *this* repository, because two checkouts side by side have sibling directories that look identical from the filesystem alone.
 
 An entry another checkout holds is refused rather than destroyed — a key is a Compose project name, so removing it from here would tear down that checkout's containers.
+
+## Reaping
+
+```bash
+worktree reap [--all] [--dry-run] [--yes]
+```
+
+The catch-all `remove` never gets to: a worktree torn down by hand, a teardown interrupted partway, a registry file somebody lost. Each leaves the same thing behind, and before this there was no supported way back to it.
+
+```
+$ worktree reap
+found 2 orphaned projects for the-desk:
+  wt-the-desk-441-fix-login  4 containers, 3 volumes
+  wt-the-desk-feat-checkout  0 containers, 3 volumes
+destroy these? [y/N]
+```
+
+**It force-deletes Docker volumes and there is no undo**, so its scoping is the most deliberate thing in the package.
+
+### Why the project name, and not a label of our own
+
+Stamping our own label on what we create and reaping by it is the obvious design, and it does not work:
+
+- service-level `labels:` in the overlay land on **containers**, not volumes;
+- labelling volumes would mean enumerating every volume `compose.yaml` declares — the coupling the label-query teardown exists to avoid;
+- **anonymous volumes**, the ones an image's `VOLUME` directive produces, cannot carry a custom label at all.
+
+The one label that covers every volume a project owns is `com.docker.compose.project`, whose value is ours because we write `COMPOSE_PROJECT_NAME`. So scoping keys on the project *name*, and the `wt-` prefix in it is a safety mechanism rather than a style choice: it is a literal no configuration can change or remove, which is why [`repo_slug`](#names) names the repository *inside* the key rather than replacing it.
+
+A project is eligible only when all three hold:
+
+1. its name matches `wt-<repo-slug>-*` for this repository — `--all` widens that to `wt-*`;
+2. it has containers or volumes on this daemon;
+3. no registry entry claims it, from *any* checkout.
+
+So `app-441` is never in scope, under any configuration, and colliding with an unrelated Compose project takes somebody having deliberately named theirs `wt-`. It is the same scan `list` warns by, deliberately: a warning about something `reap` would not touch teaches people to ignore the warning, and the reverse is worse.
+
+### The gate
+
+`--dry-run` reports and makes no destructive call at all. `--yes` agrees in advance, for CI. A run with no terminal and no `--yes` is an **error** rather than an implied yes — a cron job that force-deletes volumes because nobody was there to object is the failure this command is built around. Anything but a clear `y` at the prompt is a no.
+
+### The re-check under the lock
+
+A scan is a snapshot, and nothing is destroyed on it. Each project is torn down holding **the same per-key lock `create` takes**, with the registry re-read inside it, so a bootstrap that started in between is skipped rather than reaped out from under itself:
+
+```
+skipping wt-the-desk-feat-checkout: a worktree claimed it after the scan — slot 2, at /Users/…/the-desk-worktrees/feat-checkout — so it is not an orphan any more
+```
+
+One key's lock at a time, released before the next is taken, so reaping a machineful of projects does not hold up every unrelated command for the duration.
+
+A volume that would not go is named and exits non-zero, as it does in `remove`. Nothing to reap is a clean exit 0 — and a daemon that could not be reached says *that*, rather than reporting a machine with nothing on it, because an unanswered daemon proves nothing about what is on its disk.
+
+An append-only "projects we created" ledger was considered and rejected: it has the registry's failure mode — lose it and orphans become permanently unreachable, which is the hole this command exists to close. Derivable scoping degrades better than bookkeeping.
 
 ## Configuration
 

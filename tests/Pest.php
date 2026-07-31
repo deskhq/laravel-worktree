@@ -281,6 +281,52 @@ function withEnvironment(array $environment, Closure $work): mixed
 }
 
 /**
+ * The registry as this machine holds it.
+ *
+ * Written rather than created by `create`: what `list` reads and what `reap`
+ * checks itself against is a file, and a case that had to bootstrap five
+ * worktrees to show five rows would be testing `create` again.
+ *
+ * @param  array<string, array<string, mixed>>  $entries
+ */
+function registryHolds(array $entries): void
+{
+    file_put_contents(
+        test()->home.'/registry.json',
+        json_encode($entries === [] ? new stdClass : $entries, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n",
+    );
+}
+
+/**
+ * One entry, as an earlier `create` would have written it.
+ *
+ * @param  array<string, int>|null  $ports
+ * @return array<string, mixed>
+ */
+function slotEntry(int $slot, string $slug, ?string $repo = null, ?string $branch = null, ?array $ports = null): array
+{
+    $repo ??= test()->main;
+
+    if ($ports === null) {
+        $ports = [];
+
+        foreach (['app', 'vite', 'reverb', 'db', 'redis'] as $index => $name) {
+            $ports[$name] = 20000 + $slot * 10 + $index;
+        }
+    }
+
+    return [
+        'slot' => $slot,
+        'repo' => $repo,
+        'slug' => $slug,
+        'branch' => $branch ?? $slug,
+        'path' => $repo.'-worktrees/'.$slug,
+        'ports' => $ports,
+        'created_at' => '2026-01-01T00:00:00Z',
+    ];
+}
+
+/**
  * Everything a run wrote to its diagnostics.
  *
  * @param  resource  $diagnostics
@@ -314,10 +360,10 @@ function diagnosticsIn($diagnostics): string
  * the re-query a teardown ends with sees what those removals actually did —
  * which is the property worth asserting, rather than the calls on their own.
  *
- * @param  list<string>  $containers  Ids the container label query answers with.
- * @param  list<string>  $volumes  Names the volume label query answers with.
+ * @param  list<string>  $containers  Ids the container label query answers with, for a project given no resources of its own.
+ * @param  list<string>  $volumes  Names the volume label query answers with, likewise.
  * @param  list<string>  $refuses  Resources whose removal fails, as one still in use would.
- * @param  array<string, array{containers?: int, volumes?: int}>  $projects  What each Compose project on this daemon owns, for the census `list` and `reap` scan by.
+ * @param  array<string, array{containers?: int|list<string>, volumes?: int|list<string>}>  $projects  What each Compose project on this daemon owns, as a count or as the resources themselves.
  * @param  bool  $daemon  Whether `docker info` succeeds at all.
  * @param  bool  $composeSubcommand  Whether `docker compose` exists, or only the standalone binary.
  * @param  bool  $producesSail  Whether `docker run` leaves a `vendor/bin/sail` behind, as the Composer image would.
@@ -338,8 +384,11 @@ function fakeDockerBinary(
 
     is_dir($state) || mkdir($state, 0755, true);
 
+    $owned = projectResources($projects);
+
     $files = ['containers' => $containers, 'volumes' => $volumes, 'refuses' => $refuses]
-        + projectCensus($projects);
+        + projectCensus($owned)
+        + $owned;
 
     foreach ($files as $name => $lines) {
         file_put_contents($state.'/'.$name, $lines === [] ? '' : implode("\n", $lines)."\n");
@@ -361,6 +410,36 @@ function fakeDockerBinary(
         #!/bin/sh
         STATE='$state'
         printf '%s\\n' "\$*" >> "\$STATE/log"
+
+        # A removed resource is gone from every label query there is: out of the
+        # list its project answers with, and out of the census the orphan scan
+        # counts. `reap` runs both against the same daemon, so a fake that
+        # forgot the second would report a project it had just emptied.
+        forget() {
+            KIND="\$1"
+            CENSUS="\$2"
+            NAME="\$3"
+
+            if [ -f "\$STATE/\$KIND" ]; then
+                grep -vx "\$NAME" "\$STATE/\$KIND" > "\$STATE/next" || true
+                mv "\$STATE/next" "\$STATE/\$KIND"
+            fi
+
+            for FILE in "\$STATE/\$KIND".*; do
+                [ -f "\$FILE" ] || continue
+                grep -qx "\$NAME" "\$FILE" || continue
+
+                grep -vx "\$NAME" "\$FILE" > "\$STATE/next" || true
+                mv "\$STATE/next" "\$FILE"
+
+                PROJECT="\${FILE##*/}"
+                PROJECT="\${PROJECT#\$KIND.}"
+
+                awk -v project="\$PROJECT" 'BEGIN { dropped = 0 } { if (! dropped && \$0 == project) { dropped = 1; next } print }' \\
+                    "\$STATE/\$CENSUS" > "\$STATE/next"
+                mv "\$STATE/next" "\$STATE/\$CENSUS"
+            done
+        }
 
         # `docker compose` is probed before it is used; a machine carrying only
         # the standalone binary answers no here, and bin/sail drops to that.
@@ -393,30 +472,41 @@ function fakeDockerBinary(
                 # What compose.yaml interpolates, and what bin/sail exports for it.
                 printf '%s:%s\\n' "\$WWWUSER" "\$WWWGROUP" > "\$STATE/compose-env"
                 printf '%s\\n' "\$*" >> "\$STATE/compose"
+                # Something happening on the machine mid-run, once: a `create`
+                # that claims one of the projects a `reap` is partway through.
+                if [ -f "\$STATE/hook" ]; then
+                    mv "\$STATE/hook" "\$STATE/hook-fired"
+                    sh "\$STATE/hook-fired"
+                fi
                 [ -z '$composeOutput' ] || printf '%s\\n' '$composeOutput' >&2
                 exit $composeExitCode
                 ;;
             'ps -aq')
-                cat "\$STATE/containers"
+                # A per-project query, so a project that owns resources of its
+                # own answers with those; the shared list is what a test that
+                # only ever tears one project down declares.
+                PROJECT="\${LAST##*=}"
+                cat "\$STATE/containers.\$PROJECT" 2>/dev/null || cat "\$STATE/containers"
                 ;;
             'volume ls')
-                cat "\$STATE/volumes"
+                PROJECT="\${LAST##*=}"
+                cat "\$STATE/volumes.\$PROJECT" 2>/dev/null || cat "\$STATE/volumes"
                 ;;
             'volume rm')
                 if grep -qx "\$LAST" "\$STATE/refuses"; then
                     printf 'Error response from daemon: remove %s: volume is in use\\n' "\$LAST" >&2
                     exit 1
                 fi
-                grep -vx "\$LAST" "\$STATE/volumes" > "\$STATE/next" || true
-                mv "\$STATE/next" "\$STATE/volumes"
+                # Removed from wherever it was listed: a removal names a
+                # resource, never the project it belonged to.
+                forget volumes volume-projects "\$LAST"
                 ;;
             'rm --force')
                 if grep -qx "\$LAST" "\$STATE/refuses"; then
                     printf 'Error response from daemon: cannot remove container %s\\n' "\$LAST" >&2
                     exit 1
                 fi
-                grep -vx "\$LAST" "\$STATE/containers" > "\$STATE/next" || true
-                mv "\$STATE/next" "\$STATE/containers"
+                forget containers container-projects "\$LAST"
                 ;;
             'run --rm')
                 printf 'resolving dependencies\\n'
@@ -448,20 +538,54 @@ function fakeDockerBinary(
 }
 
 /**
+ * What each project on this daemon actually owns, as one file per project and
+ * kind: `containers.wt-desk-441-fix-login`, `volumes.wt-desk-441-fix-login`.
+ *
+ * A count is enough for a scan — `list` only ever says "3 volumes" — but `reap`
+ * tears these projects down afterwards, and a teardown asks for the resources
+ * by name and then re-queries to see whether they went. So a count is turned
+ * into that many named resources here, and a test that wants to name one (a
+ * volume something refuses to release) gives the names itself.
+ *
+ * @param  array<string, array{containers?: int|list<string>, volumes?: int|list<string>}>  $projects
+ * @return array<string, list<string>>
+ */
+function projectResources(array $projects): array
+{
+    $files = [];
+
+    foreach ($projects as $project => $owned) {
+        foreach (['containers' => 'c', 'volumes' => 'v'] as $kind => $initial) {
+            $resources = $owned[$kind] ?? [];
+
+            $files[$kind.'.'.$project] = is_array($resources)
+                ? array_values($resources)
+                : array_map(
+                    fn (int $index): string => $project.'_'.$initial.$index,
+                    $resources > 0 ? range(1, $resources) : [],
+                );
+        }
+    }
+
+    return $files;
+}
+
+/**
  * The label census as Docker prints it: one line per container, and one per
  * volume, each carrying the Compose project it belongs to.
  *
- * @param  array<string, array{containers?: int, volumes?: int}>  $projects
+ * @param  array<string, list<string>>  $resources  As {@see projectResources()} built them.
  * @return array{container-projects: list<string>, volume-projects: list<string>}
  */
-function projectCensus(array $projects): array
+function projectCensus(array $resources): array
 {
     $census = ['container-projects' => [], 'volume-projects' => []];
 
-    foreach ($projects as $project => $owned) {
-        foreach (['containers' => 'container-projects', 'volumes' => 'volume-projects'] as $kind => $file) {
-            $census[$file] = [...$census[$file], ...array_fill(0, $owned[$kind] ?? 0, (string) $project)];
-        }
+    foreach ($resources as $file => $owned) {
+        [$kind, $project] = explode('.', $file, 2);
+        $into = $kind === 'containers' ? 'container-projects' : 'volume-projects';
+
+        $census[$into] = [...$census[$into], ...array_fill(0, count($owned), $project)];
     }
 
     return $census;
@@ -493,6 +617,16 @@ function writeFakeSail(string $file, int $exitCode): void
         SH);
 
     chmod($file, 0755);
+}
+
+/**
+ * Every invocation the fake `docker` recorded, in order.
+ *
+ * @return list<string>
+ */
+function dockerCalls(): array
+{
+    return recorded(test()->root.'/fake/log');
 }
 
 /**

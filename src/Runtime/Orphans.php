@@ -48,6 +48,20 @@ final readonly class Orphans
     }
 
     /**
+     * Whether there was a daemon to scan at all.
+     *
+     * An empty scan means one of two things and they are not the same: nothing
+     * is left, or nothing could be asked. `list` treats both as "say nothing";
+     * `reap` is the command somebody ran *because* they expect something to be
+     * there, so it says which of the two it got. Asked after {@see under()}, it
+     * costs nothing — the answer is memoised on the Docker it already used.
+     */
+    public function reachable(): bool
+    {
+        return $this->docker->isRunning();
+    }
+
+    /**
      * The project-name prefix a scan is scoped to: one repository's worktrees,
      * or every worktree on the machine when $repoSlug is null.
      */
