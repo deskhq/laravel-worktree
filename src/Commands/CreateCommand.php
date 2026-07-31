@@ -2,10 +2,15 @@
 
 namespace DeskHQ\LaravelWorktree\Commands;
 
+use DeskHQ\LaravelWorktree\Console\CreateCommand as HostCreateCommand;
+
 class CreateCommand extends WorktreeCommand
 {
     /** @var string */
-    protected $signature = 'worktree:create {arguments?* : The slug, and optionally the base ref}';
+    protected $signature = 'worktree:create
+        {arguments?* : The slug, and optionally the base ref}
+        {--refresh : Run the whole bootstrap again on a worktree that is already ready}
+        {--json : Emit the worktree\'s registry entry instead of its path}';
 
     /** @var string */
     protected $description = 'Create (or re-enter) an isolated worktree — runs on the host';
@@ -13,5 +18,21 @@ class CreateCommand extends WorktreeCommand
     protected function hostCommand(): string
     {
         return 'create';
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function flags(): array
+    {
+        $flags = [];
+
+        foreach ([HostCreateCommand::Refresh, HostCreateCommand::Json] as $flag) {
+            if ($this->option($flag) === true) {
+                $flags[] = '--'.$flag;
+            }
+        }
+
+        return $flags;
     }
 }

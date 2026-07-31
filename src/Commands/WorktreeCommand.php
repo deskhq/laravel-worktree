@@ -33,10 +33,26 @@ abstract class WorktreeCommand extends Command
      */
     abstract protected function hostCommand(): string;
 
+    /**
+     * The flags this facade forwards, beyond its positional arguments.
+     *
+     * Artisan parses options itself and rejects the ones its signature does not
+     * declare, so a flag the binary understands has to be declared here too and
+     * handed back on. A facade that swallowed `--json` would print a path where
+     * a script was reading an object.
+     *
+     * @return list<string>
+     */
+    protected function flags(): array
+    {
+        return [];
+    }
+
     public function handle(): int
     {
         /** @var list<string> $arguments */
         $arguments = array_values(array_map(strval(...), (array) $this->argument('arguments')));
+        $arguments = [...$arguments, ...$this->flags()];
 
         if ($this->environment->isContainerised()) {
             $this->stderr()->writeln(ContainerRefusal::message($this->hostCommand(), $arguments));

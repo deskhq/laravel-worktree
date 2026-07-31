@@ -39,10 +39,29 @@ it('reports the containerised refusal for every command', function (string $comm
     ['worktree:reap', 'reap'],
 ]);
 
+/**
+ * A command the roadmap has not built yet, deliberately: this asserts that the
+ * facade reaches the binary and hands back what it said, and `create` reaching
+ * it would build a worktree of this repository on the machine running the suite.
+ */
 it('delegates to the host binary when it is on the host', function () {
     pretendToBeContainerised(false);
 
-    $this->artisan('worktree:create', ['arguments' => ['441']])
-        ->expectsOutputToContain('create is not implemented yet')
+    $this->artisan('worktree:list')
+        ->expectsOutputToContain('list is not implemented yet')
+        ->assertExitCode(1);
+});
+
+/**
+ * Artisan parses options itself and rejects the ones its signature does not
+ * declare, so a flag the binary understands has to be declared on the facade
+ * and passed back on — a facade that swallowed `--json` would print a path
+ * where a script was reading an object.
+ */
+it('forwards the flags the host binary understands', function () {
+    pretendToBeContainerised(true);
+
+    $this->artisan('worktree:create', ['arguments' => ['441'], '--refresh' => true, '--json' => true])
+        ->expectsOutputToContain('Use:  ./vendor/bin/worktree create 441 --refresh --json')
         ->assertExitCode(1);
 });

@@ -198,34 +198,6 @@ function claimOf(Process $process): array
 }
 
 /**
- * Wait for a started process to have written $needle, and hand back what it has
- * written so far.
- *
- * Polling rather than `waitUntil()`: that only sees output arriving *during*
- * the call, and in a race the run being waited on second has usually written
- * its line already — which is exactly the case these tests are about.
- */
-function waitForOutput(Process $process, string $needle, bool $stderr = false, float $seconds = 30.0): string
-{
-    $deadline = microtime(true) + $seconds;
-
-    do {
-        $written = $stderr ? $process->getErrorOutput() : $process->getOutput();
-
-        if (str_contains($written, $needle)) {
-            return $written;
-        }
-
-        usleep(20_000);
-    } while ($process->isRunning() && microtime(true) < $deadline);
-
-    throw new RuntimeException(
-        "the run never wrote '$needle'; stdout: ".json_encode($process->getOutput())
-        .', stderr: '.json_encode($process->getErrorOutput())
-    );
-}
-
-/**
  * @return array<string, array{slot: int, ports: array<string, int>}>
  */
 function entriesIn(string $home): array

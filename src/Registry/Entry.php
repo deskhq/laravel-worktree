@@ -111,6 +111,23 @@ final readonly class Entry
     }
 
     /**
+     * The entry as a standalone object, which is what `--json` publishes.
+     *
+     * The registry keys entries by project name, so {@see toArray()} leaves it
+     * out of the object it writes; a payload that has left the registry has to
+     * carry it, or the one name a consumer needs to reach this worktree's
+     * containers and volumes is the one name it does not have. `degraded` is
+     * always present here for the same reason — a reader should not have to
+     * tell an absent key from an empty list.
+     *
+     * @return array{project: string, slot: int, repo: string, slug: string, branch: string, path: string, ports: array<string, int>, created_at: string, degraded: list<string>}
+     */
+    public function toPayload(): array
+    {
+        return ['project' => $this->key] + $this->toArray() + ['degraded' => $this->degraded];
+    }
+
+    /**
      * The same entry, carrying what the bootstrap that just ran left behind.
      *
      * @param  list<string>  $degraded
