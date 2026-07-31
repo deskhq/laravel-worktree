@@ -12,26 +12,14 @@ use Symfony\Component\Process\Process;
  * states, and what two runs do to each other.
  */
 beforeEach(function () {
-    $this->root = temporaryDirectory('worktree-create');
-    $this->home = $this->root.'/home';
-    $this->main = $this->root.'/desk';
+    harness('worktree-create');
+
+    $this->main = mainCheckout($this->root.'/desk');
     $this->worktree = $this->root.'/desk-worktrees/feat-checkout';
     $this->gate = $this->root.'/gate';
     $this->base = freePortBase(100);
-    $this->docker = fakeDockerBinary($this->root);
 
-    mkdir($this->main, 0755, true);
-
-    runGit($this->main, 'init', '--quiet', '--initial-branch=main', '.');
-    file_put_contents($this->main.'/compose.yaml', "services:\n  laravel.test:\n    image: laravel\n");
-    runGit($this->main, 'add', '-A');
-    runGit($this->main, 'commit', '--quiet', '-m', 'initial');
-
-    // Written after the commit, because an application's `.env` is not tracked
-    // — and a worktree that got one from git would keep it, generating nothing.
-    file_put_contents($this->main.'/.env', "APP_NAME=Desk\nAPP_KEY=\n");
-
-    configure();
+    configureRepository();
 });
 
 afterEach(function () {
@@ -42,7 +30,7 @@ afterEach(function () {
 });
 
 it('prints the path, and nothing else, on a run that produced megabytes of subprocess output', function () {
-    configure([
+    configureRepository([
         'compose' => [
             'keep_services' => ['pgsql'],
             'port_overrides' => ['laravel.test' => ['{{port.vite}}:5173']],
@@ -53,9 +41,9 @@ it('prints the path, and nothing else, on a run that produced megabytes of subpr
         ],
     ]);
 
-    $process = create();
+    $process = worktreeCreate();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         // The whole of stdout, after five hundred lines a step wrote to its own.
         ->and($process->getOutput())->toBe($this->worktree."\n")
         ->and($process->getErrorOutput())->toContain('- resolving package 499')
@@ -78,15 +66,15 @@ it('prints the path, and nothing else, on a run that produced megabytes of subpr
 });
 
 it('re-enters a ready worktree without a single Docker call', function () {
-    configure(['steps' => [countingStep()]]);
+    configureRepository(['steps' => [countingStep()]]);
 
-    create();
+    worktreeCreate();
 
     $docker = recorded($this->root.'/fake/log');
 
-    $process = create();
+    $process = worktreeCreate();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getOutput())->toBe($this->worktree."\n")
         ->and($process->getErrorOutput())->toContain('wt-desk-feat-checkout is ready; re-entering it')
         // Not one more call, and not one more step: moving between worktrees is
@@ -96,19 +84,19 @@ it('re-enters a ready worktree without a single Docker call', function () {
 });
 
 it('resumes a bootstrap that was killed mid-pipeline, on the same slot and the same path', function () {
-    configure(['steps' => [
+    configureRepository(['steps' => [
         countingStep(sentinel: '.worktree-counted'),
         gatedStep(),
     ]]);
 
-    $interrupted = startCreate();
+    $interrupted = startWorktreeCreate();
     waitForOutput($interrupted, '[2/2] Waiting', stderr: true);
     $interrupted->signal(SIGTERM);
     $interrupted->wait();
 
     $claimed = registered();
 
-    expect($interrupted->getExitCode())->toBe(143)
+    expect($interrupted)->toHaveExited(143)
         ->and($interrupted->getOutput())->toBe('')
         ->and($this->worktree.'/.worktree-ready')->not->toBeFile()
         // The locks go; the slot deliberately does not, because that entry is
@@ -119,9 +107,9 @@ it('resumes a bootstrap that was killed mid-pipeline, on the same slot and the s
 
     touch($this->gate);
 
-    $resumed = create();
+    $resumed = worktreeCreate();
 
-    expect($resumed->getExitCode())->toBe(0)
+    expect($resumed)->toHaveSucceeded()
         ->and($resumed->getOutput())->toBe($this->worktree."\n")
         ->and(registered()['slot'])->toBe($claimed['slot'])
         // The step that finished before the kill is skipped by its sentinel.
@@ -131,12 +119,12 @@ it('resumes a bootstrap that was killed mid-pipeline, on the same slot and the s
 });
 
 it('makes a second create for the same worktree wait, and then re-enter it', function () {
-    configure(['steps' => [countingStep(), gatedStep()]]);
+    configureRepository(['steps' => [countingStep(), gatedStep()]]);
 
-    $first = startCreate();
+    $first = startWorktreeCreate();
     waitForOutput($first, '[2/2] Waiting', stderr: true);
 
-    $second = startCreate();
+    $second = startWorktreeCreate();
 
     usleep(1_500_000);
 
@@ -147,26 +135,26 @@ it('makes a second create for the same worktree wait, and then re-enter it', fun
 
     touch($this->gate);
 
-    expect($first->wait())->toBe(0)
-        ->and($second->wait())->toBe(0)
+    expect($first->wait())->toBe(0, worktreeFailure($first))
+        ->and($second->wait())->toBe(0, worktreeFailure($second))
         ->and($second->getOutput())->toBe($this->worktree."\n")
         ->and($second->getErrorOutput())->toContain('is ready; re-entering it')
         ->and(recorded($this->worktree.'/runs.log'))->toHaveCount(1);
 });
 
 it('gives two worktrees created at once distinct slots and distinct ports', function () {
-    configure(['steps' => [gatedStep()]]);
+    configureRepository(['steps' => [gatedStep()]]);
 
-    $first = startCreate(['feat/checkout', '--json']);
-    $second = startCreate(['feat/search', '--json']);
+    $first = startWorktreeCreate(['feat/checkout', '--json']);
+    $second = startWorktreeCreate(['feat/search', '--json']);
 
     waitForOutput($first, '[1/1] Waiting', stderr: true);
     waitForOutput($second, '[1/1] Waiting', stderr: true);
 
     touch($this->gate);
 
-    expect($first->wait())->toBe(0)
-        ->and($second->wait())->toBe(0);
+    expect($first->wait())->toBe(0, worktreeFailure($first))
+        ->and($second->wait())->toBe(0, worktreeFailure($second));
 
     $entries = [emitted($first), emitted($second)];
 
@@ -177,16 +165,16 @@ it('gives two worktrees created at once distinct slots and distinct ports', func
 });
 
 it('runs the whole recipe again on a ready worktree when it is refreshed', function () {
-    configure(['steps' => [
+    configureRepository(['steps' => [
         countingStep(),
         ['label' => 'Installing', 'sail' => 'composer install', 'sentinel' => '.worktree-installed'],
     ]]);
 
-    create();
+    worktreeCreate();
 
-    $process = create(['feat/checkout', '--refresh']);
+    $process = worktreeCreate(['feat/checkout', '--refresh']);
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getOutput())->toBe($this->worktree."\n")
         ->and($process->getErrorOutput())->not->toContain('is ready; re-entering it')
         // The recipe runs, sentinels and all: `--refresh` re-runs the pipeline,
@@ -197,17 +185,17 @@ it('runs the whole recipe again on a ready worktree when it is refreshed', funct
 });
 
 it('re-creates a registry entry whose worktree somebody deleted by hand', function () {
-    configure(['steps' => [countingStep()]]);
+    configureRepository(['steps' => [countingStep()]]);
 
-    create();
+    worktreeCreate();
 
     $claimed = registered();
 
     deleteDirectory($this->worktree);
 
-    $process = create();
+    $process = worktreeCreate();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getOutput())->toBe($this->worktree."\n")
         ->and($process->getErrorOutput())
         ->toContain('but there is no directory there any more')
@@ -220,16 +208,16 @@ it('re-creates a registry entry whose worktree somebody deleted by hand', functi
 });
 
 it('prints a degrade notice after the path, records the step, and retries only that step', function () {
-    configure(['steps' => [
+    configureRepository(['steps' => [
         countingStep(),
         ['label' => 'Browsers', 'host' => 'test -f {{path}}/browsers', 'allow_failure' => true,
             'degrade' => 'Playwright is not fully installed; tests/Browser will not run here'],
     ]]);
 
-    $process = create();
+    $process = worktreeCreate();
     $diagnostics = $process->getErrorOutput();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and($process->getOutput())->toBe($this->worktree."\n")
         ->and(trim($diagnostics))->toEndWith('Re-entering this worktree retries just those; nothing else runs again.')
         ->and($diagnostics)->toContain('Playwright is not fully installed')
@@ -238,16 +226,16 @@ it('prints a degrade notice after the path, records the step, and retries only t
 
     touch($this->worktree.'/browsers');
 
-    $retried = create();
+    $retried = worktreeCreate();
 
-    expect($retried->getExitCode())->toBe(0)
+    expect($retried)->toHaveSucceeded()
         ->and($retried->getErrorOutput())->toContain('retrying 1 step that degraded on an earlier run')
         ->and(recorded($this->worktree.'/runs.log'))->toHaveCount(1)
         ->and(registered())->not->toHaveKey('degraded');
 });
 
 it('emits the whole registry entry instead of the path when asked for JSON', function () {
-    $entry = emitted(create(['feat/checkout', '--json']));
+    $entry = emitted(worktreeCreate(['feat/checkout', '--json']));
 
     expect($entry)->toMatchArray([
         'project' => 'wt-desk-feat-checkout',
@@ -262,13 +250,13 @@ it('emits the whole registry entry instead of the path when asked for JSON', fun
     ])
         ->and($entry['ports']['app'])->toBe($this->base)
         // One line, so it composes with `jq` and with `read` alike.
-        ->and(substr_count(create(['feat/checkout', '--json'])->getOutput(), "\n"))->toBe(1);
+        ->and(substr_count(worktreeCreate(['feat/checkout', '--json'])->getOutput(), "\n"))->toBe(1);
 });
 
 it('treats being called wrong as a usage error, not a failed run', function (array $arguments, string $said) {
-    $process = create($arguments);
+    $process = worktreeCreate($arguments);
 
-    expect($process->getExitCode())->toBe(64)
+    expect($process)->toHaveExited(64)
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())
         ->toContain($said)
@@ -281,46 +269,18 @@ it('treats being called wrong as a usage error, not a failed run', function (arr
 ]);
 
 it('refuses to work in a worktree somebody has switched branches in', function () {
-    create();
+    worktreeCreate();
 
     runGit($this->worktree, 'checkout', '--quiet', '-b', 'something-else');
 
-    $process = create();
+    $process = worktreeCreate();
 
-    expect($process->getExitCode())->toBe(1)
+    expect($process)->toHaveExited(1)
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())
         ->toContain("is on 'something-else', expected 'feat/checkout'")
         ->toContain('commits would land on the wrong branch');
 });
-
-/**
- * The repository's `config/worktree.php`, as this example needs it.
- *
- * Written rather than published, because what a repository configures is what
- * `create` has to wire together — the ports its `.env` gets, the overlay its
- * services need, and the recipe it runs.
- *
- * @param  array<string, mixed>  $config
- */
-function configure(array $config = []): void
-{
-    $config = array_replace([
-        'slots' => 5,
-        // A window this machine has free right now, so a real service on the
-        // developer's laptop cannot decide which slot the test gets.
-        'port_base' => test()->base,
-        'env' => [
-            'APP_PORT' => '{{port.app}}',
-            'COMPOSE_PROJECT_NAME' => '{{project}}',
-        ],
-        'steps' => [],
-    ], $config);
-
-    is_dir(test()->main.'/config') || mkdir(test()->main.'/config', 0755, true);
-
-    file_put_contents(test()->main.'/config/worktree.php', '<?php return '.var_export($config, true).";\n");
-}
 
 /**
  * A step that leaves one line behind every time it runs, which is how these
@@ -333,61 +293,6 @@ function countingStep(?string $sentinel = null): array
     $step = ['label' => 'Counting', 'host' => 'echo ran >> {{path}}/runs.log'];
 
     return $sentinel === null ? $step : $step + ['sentinel' => $sentinel];
-}
-
-/**
- * A step that sits in the middle of the pipeline until the example lets it go —
- * a stand-in for the minutes of Composer, npm and image pulls that a second run
- * has to wait out, or that a signal arrives in the middle of.
- *
- * @return array<string, string>
- */
-function gatedStep(): array
-{
-    return ['label' => 'Waiting', 'host' => 'until [ -f '.test()->gate.' ]; do sleep 0.1; done'];
-}
-
-/**
- * A finished `create`.
- *
- * @param  list<string>  $arguments
- */
-function create(array $arguments = ['feat/checkout']): Process
-{
-    $process = startCreate($arguments);
-    $process->wait();
-
-    return $process;
-}
-
-/**
- * A started one, for the cases that look at a run while it is still working.
- *
- * @param  list<string>  $arguments
- */
-function startCreate(array $arguments = ['feat/checkout']): Process
-{
-    $process = new Process(
-        [PHP_BINARY, packagePath('bin/worktree'), 'create', ...$arguments],
-        test()->main,
-        [
-            'WORKTREE_HOME' => test()->home,
-            'SAIL_DOCKER_BINARY' => test()->docker,
-            // Unset, because this suite runs under Testbench, which exports
-            // APP_ENV=testing — and both `bin/sail` and Laravel then read
-            // `.env.testing` in preference to `.env`. Which file that lands in
-            // is EnvFileTest's question; these cases are about the ordinary one.
-            'APP_ENV' => false,
-        ],
-    );
-
-    // Generous, because the runs below are deliberately held mid-pipeline and a
-    // loaded machine should not turn that into a failure. The binary itself
-    // never times a bootstrap out: Composer, npm and image pulls take minutes.
-    $process->setTimeout(120);
-    $process->start();
-
-    return $process;
 }
 
 /**

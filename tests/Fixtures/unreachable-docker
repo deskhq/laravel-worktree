@@ -1,0 +1,16 @@
+#!/bin/sh
+#
+# The `docker` a case gets when it declared none of its own.
+#
+# Nothing in this suite may reach a real daemon: the whole of what this package
+# asks of Docker is asserted through a fake binary that records its argv and
+# replays canned output, so the suite runs on a laptop with Docker Desktop
+# closed. Falling through to whatever `docker` is on `PATH` would hide that —
+# it would pass here and fail on the machine the rule exists for.
+#
+# So this fails loudly, naming the call it refused.
+
+printf 'the suite reached for a real docker: docker %s\n' "$*" >&2
+printf 'declare one with fakeDockerBinary(), or run through worktreeEnvironment().\n' >&2
+
+exit 127

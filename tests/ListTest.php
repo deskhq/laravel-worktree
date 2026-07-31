@@ -13,14 +13,12 @@ use Symfony\Component\Process\Process;
  * word about orphans is stderr, and `worktree list | wc -l` counts rows.
  */
 beforeEach(function () {
-    $this->root = temporaryDirectory('worktree-list');
-    $this->home = $this->root.'/home';
+    harness('worktree-list');
+
     $this->main = $this->root.'/desk';
     $this->shop = $this->root.'/shop';
-    $this->docker = fakeDockerBinary($this->root);
 
     mkdir($this->main, 0755, true);
-    mkdir($this->home, 0755, true);
 
     runGit($this->main, 'init', '--quiet', '--initial-branch=main', '.');
 });
@@ -37,7 +35,7 @@ it('prints one row per worktree on stdout, in slot order, and nothing else', fun
 
     $process = worktreeList();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and(columnsOf($process))->toBe([
             ['KEY', 'SLOT', 'APP', 'VITE', 'REVERB', 'DB', 'REDIS', 'BRANCH', 'PATH'],
             ['wt-desk-441-fix-login', '0', '20000', '20001', '20002', '20003', '20004', '441-fix-login', $this->root.'/desk-worktrees/441-fix-login'],
@@ -92,7 +90,7 @@ it('shows this repository by default and the whole machine when asked', function
 it('says that nothing holds a slot rather than printing an empty table', function () {
     $process = worktreeList();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         // Not a header with no rows under it, and not an error: an empty
         // registry is the ordinary state of a repository nobody has started on.
         ->and($process->getOutput())->toBe('')
@@ -104,7 +102,7 @@ it('emits the registry entries as one line of JSON, empty registry included', fu
 
     $process = worktreeList(['--json']);
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and(substr_count($process->getOutput(), "\n"))->toBe(1)
         ->and(json_decode(trim($process->getOutput()), true, flags: JSON_THROW_ON_ERROR))->toBe([[
             'project' => 'wt-desk-441-fix-login',
@@ -136,7 +134,7 @@ it('warns about orphaned projects on stderr, keeping stdout to the rows', functi
 
     $process = worktreeList();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         // A header and the one worktree that does hold a slot: the warning is
         // nowhere near stdout, so `list | wc -l` still counts rows.
         ->and(rowsOf($process))->toHaveCount(2)
@@ -178,7 +176,7 @@ it('lists what the registry holds with the Docker daemon stopped, and only loses
 
     $process = worktreeList();
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and(keysListed($process))->toBe(['wt-desk-441-fix-login'])
         // Nothing could be asked, so nothing is claimed: an unreachable daemon
         // is not evidence that this machine is clean.
@@ -190,7 +188,7 @@ it('falls back to tab-separated rows on a machine with no column', function () {
 
     $process = worktreeList(env: ['PATH' => pathWithoutColumn()]);
 
-    expect($process->getExitCode())->toBe(0)
+    expect($process)->toHaveSucceeded()
         ->and(rowsOf($process)[0])->toBe("KEY\tSLOT\tAPP\tVITE\tREVERB\tDB\tREDIS\tBRANCH\tPATH")
         // Same fields, same order: `awk -F'\t'` reads what a person would have.
         ->and(columnsOf($process)[1][0])->toBe('wt-desk-441-fix-login');
@@ -199,7 +197,7 @@ it('falls back to tab-separated rows on a machine with no column', function () {
 it('treats being called wrong as a usage error, not a failed run', function (array $arguments, string $said) {
     $process = worktreeList($arguments);
 
-    expect($process->getExitCode())->toBe(64)
+    expect($process)->toHaveExited(64)
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())
         ->toContain($said)
@@ -208,33 +206,6 @@ it('treats being called wrong as a usage error, not a failed run', function (arr
     'an argument it has no use for' => [['441'], 'list takes no arguments, only options; given 441'],
     'an option it does not have' => [['--everything'], "unknown option '--everything'; this command takes --all, --json"],
 ]);
-
-/**
- * A finished `list`, run from the main checkout against the test's own registry.
- *
- * @param  list<string>  $arguments
- * @param  array<string, string>  $env
- */
-function worktreeList(array $arguments = [], array $env = []): Process
-{
-    $process = new Process(
-        [PHP_BINARY, packagePath('bin/worktree'), 'list', ...$arguments],
-        test()->main,
-        [
-            'WORKTREE_HOME' => test()->home,
-            'SAIL_DOCKER_BINARY' => test()->docker,
-            // See CreateTest: Testbench exports APP_ENV=testing, and this suite
-            // is about the ordinary `.env` rather than `.env.testing`.
-            'APP_ENV' => false,
-            ...$env,
-        ],
-    );
-
-    $process->setTimeout(60);
-    $process->run();
-
-    return $process;
-}
 
 /**
  * @return list<string> Everything the run put on stdout, line by line.

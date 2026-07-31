@@ -9,7 +9,40 @@ use DeskHQ\LaravelWorktree\Process\ProcessRunner;
 use DeskHQ\LaravelWorktree\Tests\TestCase;
 use Symfony\Component\Process\Process;
 
-uses(TestCase::class)->in(__DIR__);
+/*
+|--------------------------------------------------------------------------
+| Isolation
+|--------------------------------------------------------------------------
+|
+| Everything this package shares between runs — the registry, the global lock
+| directory, the per-key locks — hangs off `$HOME`. So `$HOME` is pinned before
+| every case, to a directory of the worker's own: that is what keeps parallel
+| cases out of each other's state, and what keeps any case at all out of the
+| developer's real `~/.laravel-worktree`.
+|
+| A fixture that wants its own — most of them do, so they can look at what a run
+| wrote — re-pins it through {@see harness()}. This is the floor under the cases
+| that never asked.
+|
+*/
+
+// Read before anything moves it, because everything below moves it.
+developerHome();
+
+uses(TestCase::class)
+    ->beforeEach(function () {
+        pinHome(workerHome());
+
+        // What a case that declares no fixture of its own runs against: a home
+        // this worker owns, a `docker` that cannot be reached, and no checkout
+        // to run from. {@see harness()} replaces the first two; a fixture that
+        // has a repository sets the third.
+        $this->home = workerHome();
+        $this->docker = packagePath('tests/Fixtures/unreachable-docker');
+        $this->main = null;
+    })
+    ->afterEach(fn () => pinHome(developerHome()))
+    ->in(__DIR__);
 
 function packagePath(string $path = ''): string
 {
@@ -17,19 +50,314 @@ function packagePath(string $path = ''): string
 }
 
 /**
+ * The home this process was started with, remembered before anything moves it.
+ */
+function developerHome(): string
+{
+    static $home;
+
+    return $home ??= (string) ($_ENV['HOME'] ?? $_SERVER['HOME'] ?? getenv('HOME'));
+}
+
+/**
+ * Where a case that declared no home of its own writes: one directory per test
+ * process, so a parallel run gives each worker its own.
+ */
+function workerHome(): string
+{
+    static $home;
+
+    if ($home !== null) {
+        return $home;
+    }
+
+    $home = temporaryDirectory('worktree-worker');
+
+    register_shutdown_function(fn () => deleteDirectory($home));
+
+    return $home;
+}
+
+/**
+ * Point `$HOME` at $home, for this process and for every subprocess it starts.
+ *
+ * All three places, because they are read by different things: `$_SERVER` is
+ * the first place this package's `env()` looks — as Laravel's does — and a
+ * subprocess started without an explicit environment inherits the union of
+ * `putenv()` and `$_ENV`, with `$_ENV` winning. Leaving either behind would let
+ * a run land somewhere its own test cannot see.
+ */
+function pinHome(string $home): void
+{
+    is_dir($home) || mkdir($home, 0755, true);
+
+    $_SERVER['HOME'] = $home;
+    $_ENV['HOME'] = $home;
+    putenv('HOME='.$home);
+}
+
+/**
+ * The fixture the command cases are built on: a temporary root, a machine-global
+ * home inside it, and a `docker` that is not this machine's.
+ *
+ * Sets `$this->root`, `$this->home` and `$this->docker`, which is what
+ * {@see worktreeEnvironment()} and {@see dockerCalls()} then read.
+ */
+function harness(string $prefix): void
+{
+    test()->root = temporaryDirectory($prefix);
+    test()->home = test()->root.'/home';
+    test()->docker = fakeDockerBinary(test()->root);
+
+    pinHome(test()->home);
+}
+
+/**
+ * The environment every run of the host binary gets.
+ *
+ * One declaration, because a case that spelled it out for itself is a case that
+ * can leave a variable off — and the two that matter here decide whether the run
+ * writes to the developer's registry and whether it reaches the developer's
+ * daemon.
+ *
+ * @param  array<string, string|false>  $overrides
+ * @return array<string, string|false>
+ */
+function worktreeEnvironment(array $overrides = []): array
+{
+    $home = test()->home;
+
+    return [
+        // Both, deliberately: `WORKTREE_HOME` is what this package reads, and
+        // `HOME` is where it falls back when nothing set that — so a case that
+        // unsets the first still lands inside its own fixture.
+        'WORKTREE_HOME' => $home,
+        'HOME' => $home,
+        // A `docker` that is not this machine's. The fallback fails loudly
+        // rather than quietly resolving to the real binary on `PATH`, so a case
+        // that forgot to declare a fake cannot start containers on a laptop.
+        'SAIL_DOCKER_BINARY' => test()->docker,
+        // Unset, because this suite runs under Testbench, which exports
+        // APP_ENV=testing — and both `bin/sail` and Laravel then read
+        // `.env.testing` in preference to `.env`. Which file that lands in is
+        // EnvFileTest's question; the rest of the suite is about the ordinary
+        // one.
+        'APP_ENV' => false,
+        ...$overrides,
+    ];
+}
+
+/**
  * Run the host binary the way a shell would, and hand back the finished process
  * so a test can assert on each stream separately.
  *
  * @param  list<string>  $arguments
- * @param  array<string, string>  $env
+ * @param  array<string, string|false>  $env
  */
-function worktree(array $arguments = [], ?string $cwd = null, array $env = []): Process
+function worktree(array $arguments = [], ?string $cwd = null, array $env = [], float $timeout = 60): Process
 {
-    $process = new Process([PHP_BINARY, packagePath('bin/worktree'), ...$arguments], $cwd, $env);
-    $process->setTimeout(60);
-    $process->run();
+    $process = startWorktree($arguments, $cwd, $env, $timeout);
+    $process->wait();
 
     return $process;
+}
+
+/**
+ * A started one, for the cases that look at a run while it is still working.
+ *
+ * The timeout is generous because those runs are deliberately held mid-pipeline
+ * and a loaded machine should not turn that into a failure. The binary itself
+ * never times a bootstrap out: Composer, npm and image pulls take minutes.
+ *
+ * @param  list<string>  $arguments
+ * @param  array<string, string|false>  $env
+ */
+function startWorktree(array $arguments = [], ?string $cwd = null, array $env = [], float $timeout = 120): Process
+{
+    $process = new Process(
+        [PHP_BINARY, packagePath('bin/worktree'), ...$arguments],
+        $cwd ?? test()->main,
+        worktreeEnvironment($env),
+    );
+
+    $process->setTimeout($timeout);
+    $process->start();
+
+    return $process;
+}
+
+/**
+ * Why a run failed, as a message an assertion can carry.
+ *
+ * Every diagnostic this tool emits goes to stderr, and asserting on the exit
+ * code alone throws all of it away. *"Failed asserting that 1 is identical to
+ * 0"* is what left the-desk#619 undiagnosable for as long as it was.
+ */
+function worktreeFailure(Process $process): string
+{
+    return sprintf(
+        "worktree exited %s; its stderr was:\n%s",
+        $process->getExitCode() ?? 'without a status',
+        $process->getErrorOutput() === '' ? '(it wrote nothing)' : $process->getErrorOutput(),
+    );
+}
+
+/**
+ * A run that worked — reported, when it did not, with everything it said about
+ * why.
+ */
+expect()->extend('toHaveSucceeded', function () {
+    expect($this->value->getExitCode())->toBe(0, worktreeFailure($this->value));
+
+    return $this;
+});
+
+/**
+ * A run that failed the way it was supposed to. Same reason for the message:
+ * exiting 1 where 2 was expected says nothing on its own.
+ */
+expect()->extend('toHaveExited', function (int $code) {
+    expect($this->value->getExitCode())->toBe($code, worktreeFailure($this->value));
+
+    return $this;
+});
+
+/**
+ * A run that refused, where which non-zero code it refused with is not the
+ * point.
+ */
+expect()->extend('toHaveFailed', function () {
+    expect($this->value->getExitCode())->not->toBe(0, worktreeFailure($this->value));
+
+    return $this;
+});
+
+/*
+|--------------------------------------------------------------------------
+| The commands
+|--------------------------------------------------------------------------
+|
+| One way to run each of them, so that the environment a run gets is declared
+| once — and so that a case in any file can set up through a command it is not
+| itself about. `remove` needs a worktree to remove, and `reap` needs the
+| registry a `create` writes.
+|
+*/
+
+/**
+ * @param  list<string>  $arguments
+ */
+function worktreeCreate(array $arguments = ['feat/checkout']): Process
+{
+    $process = startWorktreeCreate($arguments);
+    $process->wait();
+
+    return $process;
+}
+
+/**
+ * @param  list<string>  $arguments
+ */
+function startWorktreeCreate(array $arguments = ['feat/checkout']): Process
+{
+    return startWorktree(['create', ...$arguments]);
+}
+
+/**
+ * @param  list<string>  $arguments
+ */
+function worktreeRemove(array $arguments = ['feat/checkout']): Process
+{
+    $process = startWorktreeRemove($arguments);
+    $process->wait();
+
+    return $process;
+}
+
+/**
+ * @param  list<string>  $arguments
+ */
+function startWorktreeRemove(array $arguments = ['feat/checkout']): Process
+{
+    return startWorktree(['remove', ...$arguments]);
+}
+
+/**
+ * @param  list<string>  $arguments
+ * @param  array<string, string|false>  $env
+ */
+function worktreeList(array $arguments = [], array $env = []): Process
+{
+    return worktree(['list', ...$arguments], env: $env);
+}
+
+/**
+ * @param  list<string>  $arguments
+ */
+function worktreeReap(array $arguments = []): Process
+{
+    return worktree(['reap', ...$arguments]);
+}
+
+/**
+ * The main checkout the command cases run from: a repository with a compose
+ * file, one commit, and a `.env` of the shape a Laravel application has.
+ */
+function mainCheckout(string $path): string
+{
+    mkdir($path, 0755, true);
+
+    runGit($path, 'init', '--quiet', '--initial-branch=main', '.');
+    file_put_contents($path.'/compose.yaml', "services:\n  laravel.test:\n    image: laravel\n");
+    runGit($path, 'add', '-A');
+    runGit($path, 'commit', '--quiet', '-m', 'initial');
+
+    // Written after the commit, because an application's `.env` is not tracked
+    // — and a worktree that got one from git would keep it, generating nothing.
+    file_put_contents($path.'/.env', "APP_NAME=Desk\nAPP_KEY=\n");
+
+    return $path;
+}
+
+/**
+ * What the main checkout configures.
+ *
+ * Written rather than published, because what a repository configures is what
+ * `create` has to wire together — the ports its `.env` gets, the overlay its
+ * services need, and the recipe it runs.
+ *
+ * @param  array<string, mixed>  $config
+ */
+function configureRepository(array $config = []): void
+{
+    $config = array_replace([
+        'slots' => 5,
+        // A window this machine has free right now, so a real service on the
+        // developer's laptop cannot decide which slot the test gets.
+        'port_base' => test()->base,
+        'env' => [
+            'APP_PORT' => '{{port.app}}',
+            'COMPOSE_PROJECT_NAME' => '{{project}}',
+        ],
+        'steps' => [],
+    ], $config);
+
+    is_dir(test()->main.'/config') || mkdir(test()->main.'/config', 0755, true);
+
+    file_put_contents(test()->main.'/config/worktree.php', '<?php return '.var_export($config, true).";\n");
+}
+
+/**
+ * A step that sits in the middle of the pipeline until the example lets it go —
+ * a stand-in for the minutes of Composer, npm and image pulls that a second run
+ * has to wait out, that a signal arrives in the middle of, or that a `remove`
+ * would otherwise be free to run straight through.
+ *
+ * @return array<string, string>
+ */
+function gatedStep(): array
+{
+    return ['label' => 'Waiting', 'host' => 'until [ -f '.test()->gate.' ]; do sleep 0.1; done'];
 }
 
 /**
@@ -83,6 +411,56 @@ function configurationIn(string $home, array $config = []): Configuration
             $_SERVER['WORKTREE_HOME'] = $restore;
         }
     }
+}
+
+/**
+ * A repository directory whose `config/worktree.php` is $body, or which has no
+ * config file at all when $body is null.
+ *
+ * Declared here rather than beside the config cases, because the arch test asks
+ * the same question of the same fixture — and a helper only one file declares is
+ * a helper that is missing whenever that file is not the one being run.
+ */
+function repositoryWithConfig(?string $body): string
+{
+    $root = temporaryDirectory('worktree-config');
+
+    if ($body !== null) {
+        mkdir($root.'/config');
+        file_put_contents($root.'/config/worktree.php', $body);
+    }
+
+    return $root;
+}
+
+/**
+ * The configuration as the host binary reads it: in its own process, with no
+ * application booted.
+ *
+ * @param  array<string, string|false>  $environment
+ * @return array<string, mixed>
+ */
+function configurationOf(string $root, array $environment = []): array
+{
+    $process = readsConfiguration($root, $environment);
+
+    expect($process->getErrorOutput())->toBe('');
+
+    return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+}
+
+/**
+ * @param  array<string, string|false>  $environment
+ */
+function readsConfiguration(string $root, array $environment = [], bool $isolated = false): Process
+{
+    $fixture = $isolated ? 'loads-a-config-in-isolation.php' : 'dumps-the-config.php';
+
+    $process = new Process([PHP_BINARY, packagePath('tests/Fixtures/'.$fixture), $root], null, $environment);
+    $process->setTimeout(60);
+    $process->run();
+
+    return $process;
 }
 
 /**

@@ -2,7 +2,6 @@
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
-use Symfony\Component\Process\Process;
 
 it('runs on documented defaults when the repository ships no config file', function () {
     $root = repositoryWithConfig(null);
@@ -159,7 +158,7 @@ it('says so when the file does not return an array', function () {
 
     $process = readsConfiguration($root);
 
-    expect($process->getExitCode())->toBe(1)
+    expect($process)->toHaveExited(1)
         ->and($process->getErrorOutput())->toContain('config/worktree.php must return an array, string returned');
 
     deleteDirectory($root);
@@ -173,56 +172,10 @@ it('reports a broken config through the binary, before doing any work', function
 
     $process = worktree(['create', '441'], cwd: $repository);
 
-    expect($process->getExitCode())->toBe(1)
+    expect($process)->toHaveExited(1)
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())->toContain("error: config/worktree.php: unknown key 'slot' (did you mean 'slots'?)")
         ->and($process->getErrorOutput())->not->toContain('not implemented yet');
 
     deleteDirectory($repository);
 });
-
-/**
- * A repository directory whose `config/worktree.php` is $body, or which has no
- * config file at all when $body is null.
- */
-function repositoryWithConfig(?string $body): string
-{
-    $root = temporaryDirectory('worktree-config');
-
-    if ($body !== null) {
-        mkdir($root.'/config');
-        file_put_contents($root.'/config/worktree.php', $body);
-    }
-
-    return $root;
-}
-
-/**
- * The configuration as the host binary reads it: in its own process, with no
- * application booted.
- *
- * @param  array<string, string>  $environment
- * @return array<string, mixed>
- */
-function configurationOf(string $root, array $environment = []): array
-{
-    $process = readsConfiguration($root, $environment);
-
-    expect($process->getErrorOutput())->toBe('');
-
-    return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
-}
-
-/**
- * @param  array<string, string>  $environment
- */
-function readsConfiguration(string $root, array $environment = [], bool $isolated = false): Process
-{
-    $fixture = $isolated ? 'loads-a-config-in-isolation.php' : 'dumps-the-config.php';
-
-    $process = new Process([PHP_BINARY, packagePath('tests/Fixtures/'.$fixture), $root], null, $environment);
-    $process->setTimeout(60);
-    $process->run();
-
-    return $process;
-}
