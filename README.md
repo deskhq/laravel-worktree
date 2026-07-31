@@ -78,6 +78,39 @@ The binary reads that file **on the host, with no application booted** — it ru
 
 So `config/worktree.php` may use `env()`, and may not reference application classes, container bindings or facades. A test enforces it: the config is loaded in a process where none of them exist.
 
+## Names
+
+One argument in, every name a run needs out. A numeric argument is enriched with the issue title; anything else is used verbatim:
+
+```bash
+worktree create 441             # gh issue view 441 --json title  ->  441-fix-login
+worktree create feat/checkout   # no lookup                       ->  feat-checkout
+```
+
+| Thing | Form | Example |
+| --- | --- | --- |
+| Registry key, and Compose project | `wt-<repo-slug>-<slug>` | `wt-the-desk-441-fix-login` |
+| Worktree path | `<parent of the main checkout>/<repo-slug>-worktrees/<slug>` | `../the-desk-worktrees/441-fix-login` |
+| Branch | numeric: the slug; named: the argument verbatim | `441-fix-login`, `feat/checkout` |
+
+The branch deliberately differs from the slug for a named worktree: somebody typing `feat/checkout` means that branch, and slashes are legal in refs but not in directory names or Compose project names. `repo_slug` defaults to the main checkout's directory name, slugified.
+
+A slug is lowercased, every run of non-alphanumerics collapsed to a single dash, no dash at either end, and cut to 50 characters — then stripped again, because the cut can land on a dash. What comes out is checked against Compose's own rule (`[a-z0-9][a-z0-9_-]*`) where it is built, rather than left for Docker to reject minutes into a bootstrap.
+
+`gh` is an enrichment, never a dependency. Absent, logged out, offline, or pointed at a repository that has no issue 441 are all the same ordinary answer, and all of them name the worktree `issue-441`. What `gh` says about itself stays off the diagnostics, because an optional tool declining is not a failure of the run.
+
+Two different arguments can slugify onto one name — `feat/checkout` and `feat-checkout` — and the second is refused rather than silently re-entering the first:
+
+```
+error: 'feat-checkout' and 'feat/checkout' both name 'wt-the-desk-feat-checkout', but they are different branches; the worktree at /Users/…/feat-checkout is on 'feat/checkout' — use that name, or pick one that slugifies differently
+```
+
+### The `wt-` marker is not configurable
+
+`repo_slug` names the repository *inside* the key, and that is the whole of the influence a config file has over it.
+
+The prefix is a safety mechanism rather than a style choice. `reap` force-deletes Docker volumes, and it can only scope itself by project name: service-level labels land on containers, labelling volumes would mean enumerating every volume `compose.yaml` declares, and anonymous volumes from a `VOLUME` directive cannot carry a custom label at all. The one label that covers every volume a project owns is `com.docker.compose.project` — whose value we control, because we write `COMPOSE_PROJECT_NAME`. With the marker fixed, overlapping with an unrelated Compose project on the same daemon requires somebody to have deliberately named theirs `wt-`.
+
 ## Slots, ports and the registry
 
 Every worktree holds a slot, and a slot owns a block of host ports. Slots are handed out by a **machine-global** registry — `~/.laravel-worktree/registry.json`, moved with `WORKTREE_HOME` — keyed by Compose project name, with each entry recording the checkout it belongs to:

@@ -70,6 +70,33 @@ final readonly class ProcessRunner
     }
 
     /**
+     * Ask an optional tool a question, keeping its answer and discarding
+     * whatever it had to say about itself.
+     *
+     * One caller: the `gh issue view` title lookup, which is an enrichment
+     * rather than a step. `gh` may be absent, logged out or offline, and each of
+     * those is an ordinary answer — `gh: command not found` written to the
+     * diagnostics would read as a failure of the run rather than as the absence
+     * of a tool nothing required, and the worktree is named `issue-<n>` either
+     * way.
+     *
+     * @param  list<string>  $command
+     */
+    public function consult(array $command, ?string $cwd = null): ProcessResult
+    {
+        $process = $this->process($command, $cwd);
+        $captured = '';
+
+        $exitCode = $process->run(function (string $type, string $chunk) use (&$captured): void {
+            if ($type === Process::OUT) {
+                $captured .= $chunk;
+            }
+        });
+
+        return new ProcessResult($exitCode, $captured);
+    }
+
+    /**
      * Run a command whose failure is an answer rather than an event,
      * discarding both of its streams.
      *
