@@ -226,33 +226,3 @@ function readsConfiguration(string $root, array $environment = [], bool $isolate
 
     return $process;
 }
-
-/**
- * Run $work with $environment set the way a subprocess would have seen it, and
- * put the environment back afterwards however it ends.
- *
- * @param  array<string, string>  $environment
- */
-function withEnvironment(array $environment, Closure $work): mixed
-{
-    $restore = [];
-
-    foreach ($environment as $key => $value) {
-        $restore[$key] = $_SERVER[$key] ?? null;
-        $_SERVER[$key] = $value;
-    }
-
-    try {
-        return $work();
-    } finally {
-        foreach ($restore as $key => $value) {
-            if ($value === null) {
-                unset($_SERVER[$key]);
-
-                continue;
-            }
-
-            $_SERVER[$key] = $value;
-        }
-    }
-}

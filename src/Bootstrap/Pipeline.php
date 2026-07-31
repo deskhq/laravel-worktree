@@ -59,11 +59,13 @@ final readonly class Pipeline
     ) {}
 
     /**
-     * The pipeline as the binary wires it: real subprocesses, real git.
+     * The pipeline as the binary wires it: real git, and the shell the runtime
+     * that just booted this worktree hands over — which is where a `sail:` step
+     * picks up whatever Sail has to be told before it will behave.
      */
-    public static function using(Output $output, ProcessRunner $runner): self
+    public static function using(Output $output, ProcessRunner $runner, Shell $shell): self
     {
-        return new self($output, new ProcessShell($runner), new Excludes($runner, $output));
+        return new self($output, $shell, new Excludes($runner, $output));
     }
 
     /**

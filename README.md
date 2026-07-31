@@ -70,7 +70,7 @@ Four environment variables override the file for a single run:
 WORKTREE_SLOTS=5 WORKTREE_PORT_BASE=30000 WORKTREE_BASE=develop ./vendor/bin/worktree create 441
 ```
 
-`WORKTREE_HOME` moves the machine-global registry and its locks, which live in `~/.laravel-worktree` by default.
+`WORKTREE_HOME` moves the machine-global registry and its locks, which live in `~/.laravel-worktree` by default, and `WORKTREE_COMPOSER_IMAGE` names the throwaway image a fresh worktree gets its first `vendor/` from ([the runtime](#the-runtime)).
 
 ### The one constraint
 
@@ -271,6 +271,80 @@ SAIL_FILES=compose.yaml:compose.worktree.yaml
 Note the sharp edge in it: passing any `-f` disables Compose's own file discovery, and Sail adds no implicit `compose.yaml`, so the application's own file has to lead the list. Whichever of Compose's four legal names it uses is discovered — `compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml`, in Sail's own order — and an application that already sets `SAIL_FILES` has ours **appended** to its list rather than substituted for it.
 
 The generated file is added to the repository's `.git/info/exclude`, unless a published `.gitignore` already covers it, so a worktree with an overlay still has a clean `git status`.
+
+## The runtime
+
+What brings a worktree up and what takes it down again sits behind one interface, and `SailRuntime` is the only implementation there is:
+
+```php
+interface Runtime
+{
+    public function boot(Identity $worktree, string $environmentFile): void;
+    public function teardown(Identity $worktree): TeardownResult;
+    public function allocatesPorts(): bool;
+    public function shell(): Shell;
+}
+```
+
+Without containers there are no host ports to collide over, nothing to tear down and nothing to reap — so a non-Sail mode is a genuinely different product, deferred behind this seam rather than half-built inside the Sail one. `allocatesPorts()` is the question asked before anything reaches for a slot. `shell()` is the fourth method because what a `sail:` step has to be told before it will behave is the runtime's knowledge, not the pipeline's.
+
+**Sail is a soft dependency.** It is detected, never required, and it is not in this package's `require`. An application without it gets a message naming the fix rather than a stack trace three minutes into a bootstrap.
+
+### Boot
+
+A fresh worktree has no `vendor/`, so it has no `vendor/bin/sail` either — and Sail is how everything after this runs. The way out is a throwaway Composer container, which is emphatically *not* the app runtime: it lacks the application's extensions and cannot run its post-install scripts, hence `--ignore-platform-reqs --no-scripts`. It produces just enough `vendor/` to obtain Sail, and the authoritative install is an ordinary bootstrap step inside the app container afterwards. `WORKTREE_COMPOSER_IMAGE` overrides the image, which defaults to `laravelsail/php84-composer:latest`.
+
+Then `sail up -d <app service>`, with the `depends_on` the [Compose overlay](#the-compose-overlay) trimmed — so a worktree starts the services it needs and no others.
+
+### What Sail already makes configurable
+
+Each of these is a place the bash original hardcoded a value Sail lets an application choose, and each would be a silent failure in someone else's application:
+
+| Sail's variable | What honouring it changes |
+| --- | --- |
+| `APP_SERVICE` | The app service is not always `laravel.test`. It is read from the worktree's own environment file — the one `bin/sail` sources — and used for both the overlay and `up`. |
+| `SAIL_DOCKER_BINARY` | Sail's route to Podman. Every direct Docker call this package makes goes through it, including the `docker compose` / `docker-compose` probe, which falls back to `${SAIL_DOCKER_BINARY}-compose` exactly as `bin/sail` does. |
+| `SAIL_FILES` | How the generated overlay reaches Compose at all — see above. |
+| `WWWUSER` / `WWWGROUP` | Exported by `bin/sail` and interpolated by `compose.yaml`, and unset when *we* call Compose directly. Exported here too, or the teardown warns per variable and what Compose creates gets the wrong ownership. |
+
+**Agent environment forwarding is already solved upstream.** `bin/sail` forwards `AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE`, `CURSOR_AGENT`, `GEMINI_CLI` and a dozen more into the container. Parallel agents are the entire point of this package, so the right move is to let Sail keep doing it and not reimplement it.
+
+### `SAIL_SKIP_CHECKS`, and why it is set in exactly one place
+
+Unless that variable is set, `bin/sail` runs this before every command:
+
+```bash
+if "${COMPOSE_CMD[@]}" ps "$APP_SERVICE" 2>&1 | grep 'Exit\|exited'; then
+    echo "Shutting down old Sail processes..." >&2
+    "${COMPOSE_CMD[@]}" down > /dev/null 2>&1
+    EXEC="no"
+elif [ -z "$("${COMPOSE_CMD[@]}" ps -q)" ]; then
+    EXEC="no"
+fi
+```
+
+One exited one-shot container in the project — a migration that ran and finished, a worker that stopped — matches that grep, and Sail takes the whole project **down** in the middle of the bootstrap that started it.
+
+But setting it is not a blanket fix, because that same block is what sets `EXEC="no"`, and `EXEC` is how Sail knows whether there is a container to `exec` into. Skip the checks before anything is up and Sail reaches into a container that does not exist. (In v1.63 `EXEC="no"` makes Sail refuse with *Sail is not running*; older releases fell back to `compose run --rm`. Either way, before `up` the answer is wrong.)
+
+So it is set for bootstrap steps and for nothing else: `boot()` runs `sail up -d` without it, and every step the pipeline runs comes after that.
+
+### Teardown, and why it proves rather than trusts
+
+```
+docker compose -p <project> down --volumes --remove-orphans   # output kept, shown on failure
+docker rm --force --volumes <container>                       # one call per container
+docker volume rm --force <volume>                             # one call per volume
+                                                              # then re-query, and report survivors
+```
+
+`remove` exits non-zero when anything is still there, naming it. The version this replaced logged *"compose teardown reported nothing to remove (already down?)"* on **any** non-zero exit and carried on to delete the registry entry, so a failure was indistinguishable from a clean run until the disk filled — and by then nothing pointed at the volumes any more (the-desk#1095).
+
+Three details that look like style and are not:
+
+- **One `docker rm` per resource.** A single `docker rm a b c` abandons the whole batch when one id is unknown, and the survivors are precisely what this reports on.
+- **Label queries, not a hardcoded volume list.** Everything Compose creates carries `com.docker.compose.project` — named volumes and the anonymous ones an image's `VOLUME` directive produces alike. One label query answers "what is still on disk for this worktree?" without knowing what `compose.yaml` declares.
+- **An unreachable daemon is not a clean teardown.** With nothing to ask, the sweep removes nothing and the re-query finds nothing, which would read as proof that the disk is clean. That case is refused by name instead. Every other Docker query answers *empty* rather than throwing, because those same queries back `list`, and a listing is not worth failing a run over.
 
 ## The bootstrap
 

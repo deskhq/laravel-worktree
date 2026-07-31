@@ -2,9 +2,9 @@
 
 namespace DeskHQ\LaravelWorktree\Compose;
 
-use DeskHQ\LaravelWorktree\Config\Env;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
+use DeskHQ\LaravelWorktree\Runtime\Docker;
 
 /**
  * The one thing the overlay needs from the Docker on this machine.
@@ -34,9 +34,7 @@ final readonly class ComposeVersion
      */
     public static function for(ProcessRunner $runner): self
     {
-        $binary = Env::get('SAIL_DOCKER_BINARY');
-
-        return new self($runner, is_string($binary) && $binary !== '' ? $binary : 'docker');
+        return new self($runner, Docker::configuredBinary());
     }
 
     /**

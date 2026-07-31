@@ -135,6 +135,33 @@ final readonly class ProcessRunner
     }
 
     /**
+     * Run a command, keeping everything it wrote on both streams and showing
+     * none of it.
+     *
+     * For a call whose output is worth having only if it failed. Teardown's
+     * `docker compose down` is that call: on the ordinary run it says nothing
+     * anybody needs, and on the run that mattered it is the only account of what
+     * went wrong — so it is held here, and the caller prints it when the exit
+     * code says to. Discarding it instead is how "compose teardown reported
+     * nothing to remove (already down?)" came to be printed over a genuine
+     * failure, for as long as it took the disk to fill (the-desk#1095).
+     *
+     * @param  list<string>  $command
+     * @param  array<string, string>  $env
+     */
+    public function attempt(array $command, ?string $cwd = null, array $env = []): ProcessResult
+    {
+        $process = $this->process($command, $cwd, $env);
+        $captured = '';
+
+        $exitCode = $process->run(function (string $type, string $chunk) use (&$captured): void {
+            $captured .= $chunk;
+        });
+
+        return new ProcessResult($exitCode, $captured);
+    }
+
+    /**
      * Run a command whose failure is an answer rather than an event,
      * discarding both of its streams.
      *
