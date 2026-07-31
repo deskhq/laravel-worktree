@@ -372,6 +372,44 @@ function temporaryDirectory(string $prefix): string
     return (string) realpath($path);
 }
 
+/**
+ * What is at $path right now: every entry below it, keyed by relative path, a
+ * file carrying a hash of its contents — or `null` when there is nothing there.
+ *
+ * Absent and empty are deliberately different answers. Comparing two of these
+ * across a run asserts the directory is *unchanged*, which is what a case that
+ * looks at the developer's own registry can assert: it may well exist, since
+ * creating one is what this package is for.
+ *
+ * @return array<string, string>|null
+ */
+function directorySnapshot(string $path): ?array
+{
+    if (! is_dir($path)) {
+        return null;
+    }
+
+    $entries = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::SELF_FIRST,
+    );
+
+    $snapshot = [];
+
+    /** @var SplFileInfo $entry */
+    foreach ($entries as $entry) {
+        $relative = substr($entry->getPathname(), strlen($path) + 1);
+
+        $snapshot[$relative] = $entry->isFile() && ! $entry->isLink()
+            ? (string) hash_file('sha256', $entry->getPathname())
+            : (string) $entry->getType();
+    }
+
+    ksort($snapshot);
+
+    return $snapshot;
+}
+
 function deleteDirectory(string $path): void
 {
     if (! is_dir($path)) {

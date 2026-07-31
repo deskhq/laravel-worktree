@@ -37,14 +37,45 @@ it('keeps a run that lost WORKTREE_HOME inside its own fixture', function () {
         (string) json_encode(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login')]),
     );
 
+    $registry = directorySnapshot(developerHome().'/.laravel-worktree');
+
     $process = worktree(['list'], env: ['WORKTREE_HOME' => false]);
 
     expect($process)->toHaveSucceeded()
         // The row could only have come from the fixture's own `$HOME`.
         ->and($process->getOutput())->toContain('wt-desk-441-fix-login')
-        ->and(developerHome().'/.laravel-worktree')->not->toBeDirectory();
+        // Untouched, rather than absent: the developer running this suite is
+        // the most likely person to have a real registry of their own.
+        ->and(directorySnapshot(developerHome().'/.laravel-worktree'))->toBe($registry);
 
     deleteDirectory($this->root);
+});
+
+/**
+ * That check is worth only what it notices. Asserting the developer's registry
+ * is *unchanged* has to fail on a run that appended a row to one that already
+ * existed — which is precisely what asserting it is absent could not do, on the
+ * machines where it exists.
+ */
+it('notices a write into a registry that was already there', function () {
+    $home = temporaryDirectory('worktree-snapshot');
+
+    mkdir($home.'/.laravel-worktree/locks', 0755, true);
+    file_put_contents($home.'/.laravel-worktree/registry.json', '{}');
+
+    $before = directorySnapshot($home.'/.laravel-worktree');
+
+    expect(directorySnapshot($home.'/.laravel-worktree'))->toBe($before)
+        ->and(directorySnapshot($home.'/.nothing-here'))->toBeNull();
+
+    file_put_contents(
+        $home.'/.laravel-worktree/registry.json',
+        (string) json_encode(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login')]),
+    );
+
+    expect(directorySnapshot($home.'/.laravel-worktree'))->not->toBe($before);
+
+    deleteDirectory($home);
 });
 
 /**
