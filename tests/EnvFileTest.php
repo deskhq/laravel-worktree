@@ -311,16 +311,6 @@ function envFile(string $mainRoot, ?string $appEnv = null, $diagnostics = null):
 }
 
 /**
- * The default port block of slot 0.
- *
- * @return array<string, int>
- */
-function slotPorts(): array
-{
-    return ['app' => 20000, 'vite' => 20001, 'reverb' => 20002, 'db' => 20003, 'redis' => 20004];
-}
-
-/**
  * The generated file as phpdotenv reads it — the parser Laravel itself uses.
  *
  * @return array<string, string|null>

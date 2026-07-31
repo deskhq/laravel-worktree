@@ -29,18 +29,15 @@ use DeskHQ\LaravelWorktree\Naming\Identity;
  * ## Upsert, not append
  *
  * Every variable replaces the assignment already in the file, or is appended if
- * there is none. Sail's own installer does positional `str_replace` on the
- * strings its stub happens to ship with, which silently does nothing on a
- * customised `.env` — the file is written, the ports are not in it, and the
- * second worktree collides with the first for no visible reason.
+ * there is none ({@see Assignments}). Sail's own installer does positional
+ * `str_replace` on the strings its stub happens to ship with, which silently
+ * does nothing on a customised `.env` — the file is written, the ports are not
+ * in it, and the second worktree collides with the first for no visible reason.
  */
 final readonly class EnvFile
 {
     /** What a worktree falls back to when the main checkout has no `.env`. */
     public const string Example = '.env.example';
-
-    /** The comment written above appended variables, so a reader knows where they came from. */
-    public const string Marker = '# added by laravel-worktree for';
 
     public function __construct(
         private Output $output,
@@ -94,11 +91,7 @@ final readonly class EnvFile
             );
         }
 
-        $content = $this->apply($this->starting($identity, $name), $identity, $ports, $variables);
-
-        if (@file_put_contents($target, $content) === false) {
-            throw new WorktreeException("could not write $target");
-        }
+        $this->apply($this->starting($identity, $name), $identity, $ports, $variables)->save($target);
 
         $this->output->line('generated '.$name.' ('.count($variables).' '.(count($variables) === 1 ? 'variable' : 'variables').')');
 
@@ -134,11 +127,11 @@ final readonly class EnvFile
      *
      * @throws WorktreeException when neither exists.
      */
-    private function starting(Identity $identity, string $name): string
+    private function starting(Identity $identity, string $name): Assignments
     {
         foreach ([$this->mainRoot.'/'.$name, $this->mainRoot.'/.env'] as $candidate) {
             if (is_file($candidate)) {
-                return self::read($candidate);
+                return Assignments::read($candidate);
             }
         }
 
@@ -147,7 +140,7 @@ final readonly class EnvFile
         if (is_file($example)) {
             $this->output->line("the checkout at $this->mainRoot has no $name to copy; starting from the worktree's ".self::Example);
 
-            return self::read($example);
+            return Assignments::read($example);
         }
 
         throw new WorktreeException(
@@ -160,55 +153,16 @@ final readonly class EnvFile
      * @param  array<string, int>  $ports
      * @param  array<string, scalar|null>  $variables
      */
-    private function apply(string $content, Identity $identity, array $ports, array $variables): string
+    private function apply(Assignments $content, Identity $identity, array $ports, array $variables): Assignments
     {
         $placeholders = Placeholders::for($identity, $ports);
-        $appended = [];
+        $resolved = [];
 
         foreach ($variables as $key => $value) {
-            $assignment = $key.'='.self::quoted($placeholders->interpolate(self::literal($value), "env.$key"));
-            $replaced = self::replace($content, $key, $assignment);
-
-            if ($replaced === null) {
-                $appended[] = $assignment;
-
-                continue;
-            }
-
-            $content = $replaced;
+            $resolved[$key] = $placeholders->interpolate(self::literal($value), "env.$key");
         }
 
-        $content = trim($content, "\n") === '' ? '' : rtrim($content, "\n")."\n";
-
-        if ($appended !== []) {
-            $content .= ($content === '' ? '' : "\n").self::Marker.' '.$identity->key."\n".implode("\n", $appended)."\n";
-        }
-
-        return $content;
-    }
-
-    /**
-     * $content with every `KEY=` assignment it already makes replaced in place,
-     * or null when it makes none.
-     *
-     * In place, so the comment above a variable still describes the variable
-     * below it. Every occurrence, because `.env` files with a key twice exist,
-     * and phpdotenv keeps the first while `source` keeps the last — replacing
-     * both is the only answer that means the same thing to Sail and to Laravel.
-     */
-    private static function replace(string $content, string $key, string $assignment): ?string
-    {
-        $pattern = '/^(\h*)(export\h+)?'.preg_quote($key, '/').'\h*=.*$/m';
-
-        if (preg_match($pattern, $content) !== 1) {
-            return null;
-        }
-
-        return (string) preg_replace_callback(
-            $pattern,
-            fn (array $match): string => $match[1].(($match[2] ?? '') === '' ? '' : 'export ').$assignment,
-            $content,
-        );
+        return $content->upsert($resolved, $identity->key);
     }
 
     /**
@@ -223,33 +177,5 @@ final readonly class EnvFile
             $value === false => 'false',
             default => (string) $value,
         };
-    }
-
-    /**
-     * The value as it can be written into the file.
-     *
-     * Quoted only when it has to be, because an unquoted value is what people
-     * expect to see. Inside the quotes, `\`, `"` and `$` are escaped: both
-     * phpdotenv and `source` would otherwise read `$` as the start of a
-     * variable and silently substitute — usually to nothing.
-     */
-    private static function quoted(string $value): string
-    {
-        if ($value === '' || preg_match('/\A[A-Za-z0-9_.\-\/:@,+=]+\z/', $value) === 1) {
-            return $value;
-        }
-
-        return '"'.str_replace(['\\', '"', '$'], ['\\\\', '\"', '\$'], $value).'"';
-    }
-
-    private static function read(string $path): string
-    {
-        $content = @file_get_contents($path);
-
-        if ($content === false) {
-            throw new WorktreeException("could not read $path");
-        }
-
-        return $content;
     }
 }

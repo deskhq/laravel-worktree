@@ -230,6 +230,48 @@ fi
 
 That is `bin/sail`, and `LoadEnvironmentVariables` agrees with it. On a machine with `APP_ENV` exported, ports written into `.env` would be read by nobody the moment `.env.<APP_ENV>` exists — every worktree keeps the default ports and collides, with nothing on screen to explain why. So when `APP_ENV` is exported, `.env.<APP_ENV>` is the file generated, which also makes it exist, which settles that `-f` test for good. It is the shell's `APP_ENV` that decides, never the one a `.env` sets, so it is captured before any `.env` is read.
 
+## The Compose overlay
+
+The two things `.env` cannot say. A worktree should start the services it needs and no others, which means trimming the app service's `depends_on` — otherwise every sibling worktree brings the whole of `compose.yaml` up, and the machine ends up running six copies of Meilisearch nobody asked for. And a host port whose variable is *also* read inside the container cannot be offset in `.env` at all, so it is remapped here, on the published mapping, leaving the inner value alone.
+
+```php
+'compose' => [
+    'keep_services'  => ['pgsql', 'redis'],
+    'port_overrides' => ['reverb' => ['{{port.reverb}}:8080']],
+],
+```
+
+becomes `compose.worktree.yaml` in the worktree:
+
+```yaml
+services:
+    laravel.test:
+        depends_on: !override
+            - pgsql
+            - redis
+    reverb:
+        ports: !override
+            - '20002:8080'
+```
+
+`keep_services` trims whichever service `APP_SERVICE` names, falling back to Sail's `laravel.test`; the mappings in `port_overrides` take the same placeholders as `env`. An empty `keep_services` is not "depend on nothing" — it leaves `depends_on` as `compose.yaml` declares it. With neither set, no overlay is written at all.
+
+The `!override` merge tag is what makes this a replacement rather than a merge, and it needs Docker Compose >= 2.24. That is a pre-flight, with the version named, because an older Compose merges the two lists instead and quietly starts everything.
+
+### Not `compose.override.yaml`
+
+Compose auto-loads that name. Writing it would silently clobber the one an application already has — and since it is usually tracked, the damage would show up as an unexplained modification in the worktree's `git status`.
+
+`laravel/sail` ships the mechanism built for exactly this: `bin/sail` reads a colon-separated `SAIL_FILES` and turns each entry into a `-f` argument. So the overlay takes a name nothing else claims, and the worktree's `.env` gets
+
+```
+SAIL_FILES=compose.yaml:compose.worktree.yaml
+```
+
+Note the sharp edge in it: passing any `-f` disables Compose's own file discovery, and Sail adds no implicit `compose.yaml`, so the application's own file has to lead the list. Whichever of Compose's four legal names it uses is discovered — `compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml`, in Sail's own order — and an application that already sets `SAIL_FILES` has ours **appended** to its list rather than substituted for it.
+
+The generated file is added to the repository's `.git/info/exclude`, unless a published `.gitignore` already covers it, so a worktree with an overlay still has a clean `git status`.
+
 ## Testing
 
 ```bash
