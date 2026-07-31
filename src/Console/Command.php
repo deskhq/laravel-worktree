@@ -2,14 +2,16 @@
 
 namespace DeskHQ\LaravelWorktree\Console;
 
+use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 
 /**
  * A subcommand of the host binary.
  *
- * Commands receive the resolved {@see Anchor} rather than resolving it
- * themselves, so "where is the repository" is answered once per run, before any
- * command has had the chance to do work in the wrong place.
+ * Commands receive the resolved {@see Anchor} and {@see Configuration} rather
+ * than resolving them themselves, so "where is the repository" and "what does
+ * it want" are each answered once per run, before any command has had the
+ * chance to do work in the wrong place or with the wrong ports.
  */
 interface Command
 {
@@ -30,5 +32,5 @@ interface Command
      * @param  list<string>  $arguments
      * @return int One of the {@see ExitCode} constants.
      */
-    public function run(array $arguments, Anchor $anchor): int;
+    public function run(array $arguments, Anchor $anchor, Configuration $config): int;
 }

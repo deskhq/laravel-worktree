@@ -6,4 +6,10 @@ parameters:
     paths:
         - src
         - config
+    # This package ships its own config file rather than living in an
+    # application, so larastan has to be told where the config directory is;
+    # without it, every env() call in config/worktree.php reads as one made
+    # outside of config.
+    configDirectories:
+        - %currentWorkingDirectory%/config
     tmpDir: build/phpstan

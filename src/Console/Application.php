@@ -2,6 +2,7 @@
 
 namespace DeskHQ\LaravelWorktree\Console;
 
+use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
@@ -13,9 +14,10 @@ use DeskHQ\LaravelWorktree\Support\ContainerRefusal;
  *
  * Laravel is never booted: this runs before, and often instead of, an
  * application — from the host, against a repository whose containers may not
- * exist yet. Every command therefore gets the same three guarantees set up
+ * exist yet. Every command therefore gets the same four guarantees set up
  * here, in order: we are not inside the container, the run's locks will be
- * released however it ends, and the repository has been anchored.
+ * released however it ends, the repository has been anchored, and its
+ * configuration has been read and understood.
  */
 final class Application
 {
@@ -95,7 +97,9 @@ final class Application
         }
 
         try {
-            return $command->run($arguments, Anchor::resolve($this->runner, $this->workingDirectory()));
+            $anchor = Anchor::resolve($this->runner, $this->workingDirectory());
+
+            return $command->run($arguments, $anchor, Configuration::load($anchor->mainRoot));
         } catch (WorktreeException $e) {
             $this->output->error($e->getMessage());
 

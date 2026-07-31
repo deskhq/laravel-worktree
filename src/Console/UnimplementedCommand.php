@@ -2,6 +2,7 @@
 
 namespace DeskHQ\LaravelWorktree\Console;
 
+use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 
 /**
@@ -31,7 +32,7 @@ final readonly class UnimplementedCommand implements Command
         return [$this->spec, $this->summary];
     }
 
-    public function run(array $arguments, Anchor $anchor): int
+    public function run(array $arguments, Anchor $anchor, Configuration $config): int
     {
         $this->output->error("{$this->name} is not implemented yet");
 
