@@ -51,11 +51,6 @@ final readonly class Overlay
     /** Sail's colon-separated list of Compose files, which is how this one is reached. */
     public const string Variable = 'SAIL_FILES';
 
-    /** Sail's name for the application's own service, and its default. */
-    public const string Service = 'APP_SERVICE';
-
-    public const string DefaultService = 'laravel.test';
-
     /** The merge tag that replaces a list instead of appending to it (Compose >= 2.24). */
     public const string Tag = 'override';
 
@@ -90,8 +85,7 @@ final readonly class Overlay
         // The file bin/sail sources, so the file that decides what the app
         // service is called and which Compose files it is already given.
         $environment = Assignments::read($environmentFile);
-        $appService = $environment->value(self::Service);
-        $services = self::services($identity, $ports, $compose, $appService === null || $appService === '' ? self::DefaultService : $appService);
+        $services = self::services($identity, $ports, $compose, AppService::in($environment));
 
         if ($services === []) {
             return null;

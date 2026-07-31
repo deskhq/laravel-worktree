@@ -4,6 +4,7 @@ namespace DeskHQ\LaravelWorktree\Config;
 
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Naming\Identity;
+use DeskHQ\LaravelWorktree\Support\HostUser;
 
 /**
  * `{{port.app}}`, `{{project}}` and the rest, resolved against one worktree.
@@ -40,13 +41,17 @@ final readonly class Placeholders
      */
     public static function for(Identity $identity, array $ports): self
     {
+        // {{uid}} and {{gid}} are what a step handing work to a container has to
+        // say out loud — `docker run --user {{uid}}:{{gid}}` is the difference
+        // between a `vendor/` the person on the host owns and one they cannot
+        // delete. The runtime needs the same pair, as WWWUSER and WWWGROUP.
         $values = [
             'project' => $identity->key,
             'slug' => $identity->slug,
             'branch' => $identity->branch,
             'path' => $identity->path,
-            'uid' => (string) self::userId(),
-            'gid' => (string) self::groupId(),
+            'uid' => (string) HostUser::id(),
+            'gid' => (string) HostUser::group(),
         ];
 
         foreach ($ports as $name => $port) {
@@ -70,26 +75,6 @@ final readonly class Placeholders
             fn (array $match): string => $this->resolve(trim($match[1]), $where),
             $value,
         );
-    }
-
-    /**
-     * The host user this run is, which a step handing work to a container has
-     * to say out loud: `docker run --user {{uid}}:{{gid}}` is the difference
-     * between a `vendor/` the person on the host owns and one they cannot
-     * delete. `bin/sail` exports the same pair as `WWWUSER` and `WWWGROUP`.
-     *
-     * `posix_*` where the extension is compiled in, and the owner of the running
-     * script where it is not — which is the same user in the case that matters,
-     * because that is who installed this package.
-     */
-    private static function userId(): int
-    {
-        return function_exists('posix_getuid') ? posix_getuid() : (int) getmyuid();
-    }
-
-    private static function groupId(): int
-    {
-        return function_exists('posix_getgid') ? posix_getgid() : (int) getmygid();
     }
 
     private function resolve(string $name, string $where): string
