@@ -20,21 +20,38 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  pull-requests: write
+# Everything below acts as the app, not as this workflow, so the built-in token
+# needs nothing.
+permissions: {}
 
 jobs:
   release-please:
     name: Propose or cut a release
     runs-on: ubuntu-latest
     steps:
-      # Uses the built-in GITHUB_TOKEN rather than a PAT. That is sufficient
-      # here because nothing downstream keys off the tag — Packagist publishes
-      # via its own webhook, not a workflow. If a workflow is ever added on
-      # `push: tags`, it will NOT fire: GitHub suppresses push triggers for
-      # refs created by GITHUB_TOKEN. Swap in a PAT at that point.
+      # Not the built-in GITHUB_TOKEN, deliberately. GitHub does not start a
+      # workflow run for an event its own token caused, so a release pull
+      # request opened with it arrives with no `tests` and no `phpstan` on it —
+      # and with those required, it sits at BLOCKED on two checks that will
+      # never report and never time out. #20 had to be closed and reopened by
+      # hand to unstick it.
+      #
+      # An app installation token is a different identity, so the pull request
+      # it opens, and every push to that branch, triggers workflows normally. A
+      # fine-grained PAT would work the same way; an app is preferred because it
+      # belongs to the repository rather than to a person, and does not expire.
+      #
+      # RELEASE_PLEASE_APP_ID is a repository *variable*, the private key a
+      # repository *secret*. The app needs contents: write (branch, tag,
+      # release) and pull-requests: write, and must be installed on this repo.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
+
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json

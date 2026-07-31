@@ -1,0 +1,42 @@
+name: Pint
+
+# A check that fails, not a job that commits the fix. Committing it was the
+# friendlier half of the trade and the wrong half: GitHub does not start a
+# workflow run for a push made with its own `GITHUB_TOKEN`, so the styling
+# commit landed on the branch with no `tests` and no `phpstan` on it, and the
+# pull request then waited on required checks that would never start. Unstyled
+# code fails here instead, and `composer format` is the fix.
+#
+# No path filters and a `pull_request` trigger, for the same reason as
+# `run-tests` and `phpstan`: a required check that a README-only pull request
+# does not trigger is a check that sits pending forever. `push` narrows to
+# `main`, since a branch push is already covered by the pull request it needs
+# before it can merge.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pint:
+    name: pint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+
+      - name: Install composer dependencies
+        uses: ramsey/composer-install@v4
+
+      - name: Check code style
+        run: vendor/bin/pint --test

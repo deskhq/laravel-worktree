@@ -23,7 +23,7 @@ composer format      # pint
 
 Run the suite both ways. `--parallel` gives each file its own process, which is what catches a case depending on state — or on a helper — that another file left behind.
 
-CI runs the same three, across PHP 8.4/8.5 and Laravel 12/13 at both `prefer-lowest` and `prefer-stable`. Two checks are required to merge: **`tests`**, which reports for that whole matrix, and **`phpstan`**.
+CI runs the same three, across PHP 8.4/8.5 and Laravel 12/13 at both `prefer-lowest` and `prefer-stable`. Three checks are required to merge: **`tests`**, which reports for that whole matrix, **`phpstan`**, and **`pint`**.
 
 ## Tests
 
@@ -51,7 +51,7 @@ Do not edit `CHANGELOG.md` or bump a version by hand. release-please owns both.
 
 Pint, on the default Laravel preset, plus what the codebase already does: explicit return types and parameter types everywhere, constructor property promotion, curly braces on every control structure, PHPDoc blocks over inline comments.
 
-Run `composer format` before pushing. A push to a branch does run Pint and commit the fix for you, but GitHub does not start a workflow run for a commit its own token pushed — so that commit arrives with no `tests` or `phpstan` on it, and the pull request waits on required checks that will never start. Re-running them from the Actions tab, or pushing anything on top, unsticks it.
+Run `composer format` before pushing. CI checks the same thing with `pint --test` and fails if anything is unformatted; it does not style the branch for you. It used to, and the commit it pushed arrived with no `tests` or `phpstan` on it — GitHub does not start a workflow run for a push made with its own token — which left the pull request waiting on required checks that would never start.
 
 ## Documentation
 
