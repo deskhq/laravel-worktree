@@ -134,10 +134,8 @@ final readonly class SailRuntime implements Runtime
      * sweep would find nothing, the re-query would agree, and the two together
      * would read as proof that the disk is clean.
      */
-    public function teardown(Identity $worktree): TeardownResult
+    public function teardown(string $project, ?string $directory = null): TeardownResult
     {
-        $project = $worktree->key;
-
         if (! $this->docker->isRunning()) {
             return TeardownResult::unanswered($project, 'there is no Docker daemon answering on this machine, so nothing could be asked about, or removed for, this project');
         }
@@ -147,10 +145,11 @@ final readonly class SailRuntime implements Runtime
         // From inside the worktree when it is still there, so Compose finds the
         // application's own file and the worktree's `.env`; from wherever the
         // run started when it is not, because `remove` has to work on a worktree
-        // somebody already deleted by hand.
+        // somebody already deleted by hand — and `reap` has no directory to
+        // offer at all. The label sweep below is what does not depend on this.
         $down = $this->docker->compose(
             ['-p', $project, 'down', '--volumes', '--remove-orphans'],
-            is_dir($worktree->path) ? $worktree->path : null,
+            $directory !== null && is_dir($directory) ? $directory : null,
         );
 
         if (! $down->succeeded()) {

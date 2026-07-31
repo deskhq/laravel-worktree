@@ -35,12 +35,14 @@ it('rejects an unknown command as a usage error', function () {
         ->and($process->getErrorOutput())->toContain('error: unknown command: destroy');
 });
 
-it('names the commands the roadmap has not built yet, rather than denying them', function () {
-    $process = worktree(['reap']);
+it('lists every command it dispatches, with what each one takes', function () {
+    $usage = worktree(['--help'])->getErrorOutput();
 
-    expect($process->getExitCode())->toBe(1)
-        ->and($process->getOutput())->toBe('')
-        ->and($process->getErrorOutput())->toContain('error: reap is not implemented yet');
+    expect($usage)
+        ->toContain('create <slug> [base] [--refresh] [--json]')
+        ->toContain('list [--all] [--json]')
+        ->toContain('remove <slug>')
+        ->toContain('reap [--all] [--dry-run] [--yes]');
 });
 
 it('refuses to run inside the container and creates nothing', function () {

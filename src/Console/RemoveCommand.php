@@ -104,7 +104,7 @@ final readonly class RemoveCommand implements Command
             ? $this->derived($identity, $anchor, $worktrees)
             : $this->recorded($identity, $entry, $anchor);
 
-        $result = SailRuntime::for($this->output, $this->runner)->teardown($worktree);
+        $result = SailRuntime::for($this->output, $this->runner)->teardown($worktree->key, $worktree->path);
 
         $worktrees->detach($worktree->path);
 

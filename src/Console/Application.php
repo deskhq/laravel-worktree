@@ -33,7 +33,7 @@ final class Application
     ) {}
 
     /**
-     * Wire the binary up with the real streams and the roadmap's four commands.
+     * Wire the binary up with the real streams and its four commands.
      */
     public static function create(): self
     {
@@ -47,7 +47,7 @@ final class Application
             ->register(new CreateCommand($output, new Emitter, $runner, $shutdown))
             ->register(new ListCommand($output, new Emitter, $runner))
             ->register(new RemoveCommand($output, $runner, $shutdown))
-            ->register(new UnimplementedCommand('reap', '', 'Remove stray worktree projects left on this machine.', $output));
+            ->register(new ReapCommand($output, $runner, $shutdown, new Confirmation($output)));
     }
 
     public function register(Command $command): self

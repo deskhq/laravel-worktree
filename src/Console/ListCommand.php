@@ -163,14 +163,15 @@ final readonly class ListCommand implements Command
 
         $everywhere = $repoSlug === null;
 
-        $width = max(array_map(fn (Orphan $orphan): int => strlen($orphan->project), $orphans));
-
         $this->output->line(count($orphans).' '.(count($orphans) === 1 ? 'project' : 'projects')
             .($everywhere ? ' on this machine' : " of $repoSlug")
             .' still on this daemon that no worktree claims:');
 
-        foreach ($orphans as $orphan) {
-            $this->output->line('  '.str_pad($orphan->project, $width + 2).$orphan->describe());
+        // The lines `reap` puts in its manifest, built where it builds them: a
+        // warning that reads differently from the confirmation it sends you to
+        // is one somebody has to reconcile by eye before answering.
+        foreach (Orphan::manifest($orphans) as $line) {
+            $this->output->line($line);
         }
 
         $this->output->line("'worktree reap".($everywhere ? ' --all' : '')."' removes them");

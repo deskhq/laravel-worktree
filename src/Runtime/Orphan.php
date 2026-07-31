@@ -31,6 +31,36 @@ final readonly class Orphan
         return self::count($this->containers, 'container').', '.self::count($this->volumes, 'volume');
     }
 
+    /**
+     * The list under the heading, indented and aligned:
+     *
+     * ```
+     *   wt-the-desk-441-fix-login  4 containers, 3 volumes
+     *   wt-the-desk-feat-checkout  0 containers, 3 volumes
+     * ```
+     *
+     * Built here rather than by either caller, so what `list` warns about and
+     * what `reap` asks permission to destroy are the same lines — a manifest
+     * that reads differently from the warning that sent you to it is a manifest
+     * somebody has to reconcile by eye before answering `y`.
+     *
+     * @param  list<self>  $orphans
+     * @return list<string>
+     */
+    public static function manifest(array $orphans): array
+    {
+        if ($orphans === []) {
+            return [];
+        }
+
+        $width = max(array_map(fn (self $orphan): int => strlen($orphan->project), $orphans));
+
+        return array_map(
+            fn (self $orphan): string => '  '.str_pad($orphan->project, $width + 2).$orphan->describe(),
+            $orphans,
+        );
+    }
+
     private static function count(int $total, string $noun): string
     {
         return $total.' '.$noun.($total === 1 ? '' : 's');
