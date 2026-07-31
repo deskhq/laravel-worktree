@@ -157,13 +157,35 @@ return [
     | Compose overlay
     |--------------------------------------------------------------------------
     |
-    | Written as compose.worktree.yaml and passed through SAIL_FILES, so an
-    | application's own compose.override.yaml is left alone. keep_services trims
-    | the app service's depends_on; port_overrides remaps a host port that .env
-    | cannot handle because the same variable is also read inside the container:
+    | The two things `.env` cannot say, written as compose.worktree.yaml and
+    | handed to Compose through SAIL_FILES:
     |
-    |     'keep_services'  => ['pgsql', 'redis'],
-    |     'port_overrides' => ['reverb' => ['{{port.reverb}}:8080']],
+    |     'compose' => [
+    |         'keep_services'  => ['pgsql', 'redis'],
+    |         'port_overrides' => ['reverb' => ['{{port.reverb}}:8080']],
+    |     ],
+    |
+    | keep_services trims the depends_on of the app service — APP_SERVICE, or
+    | Sail's laravel.test when the application does not set it — so that `sail
+    | up -d` starts those services and no others. Sibling worktrees would
+    | otherwise each bring the whole of compose.yaml up. An empty list is not
+    | "depend on nothing": it leaves depends_on exactly as compose.yaml has it.
+    |
+    | port_overrides remaps a published port .env cannot, because the same
+    | variable is also read inside the container — trap 1 above. The mappings
+    | take the same placeholders as `env`.
+    |
+    | With neither set, no overlay is written and SAIL_FILES is not touched.
+    | With either, the file is written on every create, kept out of git through
+    | the repository's .git/info/exclude, and *appended* to any SAIL_FILES the
+    | application already sets rather than replacing it. An application's own
+    | compose.override.yaml is never written to: Compose auto-loads that name,
+    | and silently clobbering it is the thing this mechanism exists to avoid.
+    |
+    | The overlay is written with the `!override` merge tag, so Docker Compose
+    | must be at least 2.24 — checked before anything is generated, because an
+    | older Compose merges the two depends_on lists instead of replacing them
+    | and starts everything anyway.
     |
     */
 

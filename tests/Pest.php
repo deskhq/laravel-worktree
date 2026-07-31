@@ -86,6 +86,17 @@ function configurationIn(string $home, array $config = []): Configuration
 }
 
 /**
+ * The default port block of slot 0 — the ports `.env` and the Compose overlay
+ * are both written from.
+ *
+ * @return array<string, int>
+ */
+function slotPorts(): array
+{
+    return ['app' => 20000, 'vite' => 20001, 'reverb' => 20002, 'db' => 20003, 'redis' => 20004];
+}
+
+/**
  * A `port_base` whose whole window is free on this machine right now.
  *
  * Allocation probes the ports it is about to claim, so a real service on the
