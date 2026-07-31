@@ -117,6 +117,26 @@ it('keeps the registry in WORKTREE_HOME, or in ~/.laravel-worktree', function ()
     deleteDirectory($root);
 });
 
+it('ships a config file that is itself valid', function () {
+    // The published default configures nothing, but it is the first file every
+    // consumer opens — one that the validator rejected would be a poor start.
+    expect(Configuration::fromArray(require __DIR__.'/../config/worktree.php'))
+        ->toBeInstanceOf(Configuration::class);
+});
+
+it('ships a worked example that is still legal', function () {
+    // Documentation that cannot be executed rots silently, and this example is
+    // the one a consumer copies from. Loaded through the same validator the
+    // binary uses, so a key that changed shape fails here rather than in
+    // somebody else's create.
+    $example = Configuration::fromArray(require __DIR__.'/../stubs/worktree-example.php');
+
+    expect($example)->toBeInstanceOf(Configuration::class)
+        ->and($example->steps)->not->toBeEmpty()
+        ->and($example->compose['keep_services'])->not->toBeEmpty()
+        ->and($example->env)->toHaveKey('REVERB_PORT');
+});
+
 it('names the key it does not recognise', function (array $config, string $message) {
     expect(fn () => Configuration::fromArray($config))
         ->toThrow(WorktreeException::class, 'config/worktree.php: '.$message);
