@@ -6,6 +6,7 @@ use DeskHQ\LaravelWorktree\Commands\CreateCommand;
 use DeskHQ\LaravelWorktree\Commands\ListCommand;
 use DeskHQ\LaravelWorktree\Commands\ReapCommand;
 use DeskHQ\LaravelWorktree\Commands\RemoveCommand;
+use DeskHQ\LaravelWorktree\Commands\UnlockCommand;
 use Spatie\LaravelPackageTools\Package;
 use Spatie\LaravelPackageTools\PackageServiceProvider;
 
@@ -21,6 +22,7 @@ class LaravelWorktreeServiceProvider extends PackageServiceProvider
                 ListCommand::class,
                 RemoveCommand::class,
                 ReapCommand::class,
+                UnlockCommand::class,
             ]);
     }
 

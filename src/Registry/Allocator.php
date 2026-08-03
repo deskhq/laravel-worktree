@@ -37,7 +37,7 @@ final readonly class Allocator
     {
         return new self(
             Registry::fromConfiguration($config),
-            new Locks($config->home, $shutdown),
+            new Locks($config->home, $shutdown, $output),
             Ports::fromConfiguration($config),
             new BindProbe,
             $output,

@@ -16,7 +16,7 @@ use DeskHQ\LaravelWorktree\Git\Anchor;
 interface Command
 {
     /**
-     * The name the user types: `create`, `list`, `remove`, `reap`.
+     * The name the user types: `create`, `list`, `remove`, `reap`, `unlock`.
      */
     public function name(): string;
 

@@ -94,6 +94,33 @@ it('leaves no lock behind when a run is interrupted in the middle of its work', 
     expect(entriesIn($this->home)['wt-desk-441']['slot'])->toBe($claimed['slot']);
 });
 
+it('takes a lock left by a run nothing could clean up after, rather than waiting it out', function () {
+    $killed = claimsASlot($this, '/checkouts/desk', 'wt-desk-441');
+    $claimed = claimOf($killed);
+
+    expect($this->home.'/locks/wt-desk-441.lock')->toBeDirectory();
+
+    // SIGKILL, which no handler runs for: this is `kill -9`, the OOM killer
+    // with several Sail projects up, a panic, and a laptop that slept and was
+    // rebooted mid-bootstrap. The lock is left owned by nothing.
+    $killed->signal(SIGKILL);
+    $killed->wait();
+
+    expect($this->home.'/locks/wt-desk-441.lock')->toBeDirectory();
+
+    $next = claimsASlot($this, '/checkouts/desk', 'wt-desk-441');
+
+    // It claimed, which it could only do holding that lock — and it did so at
+    // once rather than after the ten minutes the wait allows, which was the
+    // whole cost of the old behaviour.
+    expect(claimOf($next))->toBe($claimed)
+        ->and($next->getErrorOutput())->toContain('is not running any more; breaking it and taking it');
+
+    touch($this->gate);
+
+    expect($next->wait())->toBe(0, worktreeFailure($next));
+});
+
 it('never leaves the registry half-written for a concurrent reader', function () {
     $writers = [
         writesTheRegistry($this, 'alpha', 20),

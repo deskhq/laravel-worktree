@@ -15,7 +15,7 @@ function pretendToBeContainerised(bool $containerised): void
 
 it('registers a delegator for each command of the host binary', function () {
     expect(array_keys(app(Kernel::class)->all()))
-        ->toContain('worktree:create', 'worktree:list', 'worktree:remove', 'worktree:reap');
+        ->toContain('worktree:create', 'worktree:list', 'worktree:remove', 'worktree:reap', 'worktree:unlock');
 });
 
 it('refuses to run inside the container, and says what to run instead', function () {
@@ -37,6 +37,7 @@ it('reports the containerised refusal for every command', function (string $comm
     ['worktree:list', 'list'],
     ['worktree:remove', 'remove'],
     ['worktree:reap', 'reap'],
+    ['worktree:unlock', 'unlock'],
 ]);
 
 /**
@@ -72,4 +73,5 @@ it('forwards the flags the host binary understands', function (string $command, 
     ['worktree:create', ['arguments' => ['441'], '--refresh' => true, '--json' => true], 'create 441 --refresh --json'],
     ['worktree:list', ['--all' => true, '--json' => true], 'list --all --json'],
     ['worktree:reap', ['--all' => true, '--dry-run' => true, '--yes' => true], 'reap --all --dry-run --yes'],
+    ['worktree:unlock', ['arguments' => ['441'], '--force' => true], 'unlock 441 --force'],
 ]);

@@ -140,7 +140,7 @@ final readonly class ReapCommand implements Command
             return $permission;
         }
 
-        return $this->destroy($orphans, $registry, new Locks($config->home, $this->shutdown));
+        return $this->destroy($orphans, $registry, new Locks($config->home, $this->shutdown, $this->output));
     }
 
     /**

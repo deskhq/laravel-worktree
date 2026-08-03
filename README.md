@@ -26,7 +26,7 @@ This is the first thing worth understanding, because it is otherwise the first i
 
 The implementation is a binary — `vendor/bin/worktree` — and not `php artisan worktree:create`. Under Sail, artisan runs **inside the app container**, and from in there every single thing this package needs is unreachable: there is no Docker socket to create containers with, no host git to add a worktree to, no sibling worktrees directory, and no way to bind a host port. A worktree also has no `vendor/` at the moment it is created, so there is no application to boot and no artisan to run in the first place.
 
-`php artisan worktree:{create,list,remove,reap}` do exist, as a facade. Called from inside the container they refuse and tell you what to run instead:
+`php artisan worktree:{create,list,remove,reap,unlock}` do exist, as a facade. Called from inside the container they refuse and tell you what to run instead:
 
 ```
 worktree must run on the host, not inside the container.
@@ -79,6 +79,7 @@ cd "$(./vendor/bin/worktree create 441)"
 ./vendor/bin/worktree list
 ./vendor/bin/worktree remove 441
 ./vendor/bin/worktree reap
+./vendor/bin/worktree unlock 441
 ```
 
 Only machine-readable output — the path from `create`, the table from `list` — reaches stdout. Every diagnostic, and the whole output of every subprocess it runs, goes to stderr, so `cd "$(...)"` keeps working on a run that also produced megabytes of Composer and npm output.
@@ -132,6 +133,8 @@ A registry entry whose directory somebody has deleted by hand is none of the thr
 9. the path on stdout, and then any degrade notices on stderr
 
 The per-worktree lock is taken before anything is read and held until the process exits, so a stray second `create 441` waits and then re-enters rather than racing the first through git, Composer, Sail and npm in one directory. The registry lock covers the free-slot search and the claim that follows it and nothing else — held across a five-minute bootstrap, it would serialise every unrelated worktree on the machine.
+
+Each lock records who took it, so a run whose holder is provably gone does not pay that wait at all. See [Locks, and the ones nobody holds](#locks-and-the-ones-nobody-holds).
 
 ## Listing
 
@@ -291,6 +294,59 @@ One key's lock at a time, released before the next is taken, so reaping a machin
 A volume that would not go is named and exits non-zero, as it does in `remove`. Nothing to reap is a clean exit 0 — and a daemon that could not be reached says *that*, rather than reporting a machine with nothing on it, because an unanswered daemon proves nothing about what is on its disk.
 
 An append-only "projects we created" ledger was considered and rejected: it has the registry's failure mode — lose it and orphans become permanently unreachable, which is the hole this command exists to close. Derivable scoping degrades better than bookkeeping.
+
+## Locks, and the ones nobody holds
+
+A lock is a directory under `~/.laravel-worktree` — `registry.lock`, and one `locks/<key>.lock` per worktree. `mkdir` is the portable atomic test-and-set: `flock(1)` is absent on macOS, which is where most of this package's runs happen.
+
+Every run installs a shutdown handler that gives back whatever it is holding, and that covers `SIGINT` and `SIGTERM` — the common way a run ends early. It cannot cover `SIGKILL`, the OOM killer with several Sail projects up, a panic, or a laptop that slept and was rebooted mid-bootstrap. Each of those used to leave a directory owned by nothing, and the next `create` waited the **full ten minutes** for it before failing with a message whose remedy was `rm -rf` into this package's own state directory. Every attempt after that paid the same ten minutes.
+
+So the run that wins the `mkdir` writes an `owner.json` inside it, immediately afterwards:
+
+```json
+{
+  "pid": 51234,
+  "host": "studio.local",
+  "boot": null,
+  "started_at": "Mon Aug  3 10:22:11 2026",
+  "command": "worktree create 441",
+  "taken_at": "2026-08-03T10:22:11Z"
+}
+```
+
+It is written to a temporary file inside the lock directory and renamed into place, so a reader sees all of it or none of it — the same reason the [registry](#slots-ports-and-the-registry) is written that way. On the first failed attempt, and only then, the waiting run reads it and says what it found:
+
+| What the record says | What happens |
+| --- | --- |
+| the holder is running | waited on, exactly as before |
+| the holder is provably gone | broken and taken, with a line on stderr saying it was |
+| there is no record, or it cannot be read | waited on, exactly as before |
+| the pid belongs to another machine | waited on, exactly as before |
+
+The ten-minute wait is unchanged, and is still right for the case it was chosen for: a first bootstrap legitimately takes that long, and a second `create` should wait rather than declare it stale. What changed is that it is no longer paid by a run whose holder has been gone since Tuesday. The wait is also no longer silent — one line, naming the lock and who has it, because ten minutes of no output is indistinguishable from a hang to an agent driving this non-interactively.
+
+**The pid alone is not an identity.** `posix_kill($pid, 0)` answers *is there a process with this number*, not *is it the one that took the lock*, and pids are handed out again. So the moment the process started is recorded too — from `/proc/<pid>/stat` on Linux, from `ps` on macOS — and a number in use by something that started at a different moment reads as gone, not as the holder. Linux additionally carries `/proc/sys/kernel/random/boot_id`; macOS does not, because its nearest equivalent (`kern.boottime`) moves when the wall clock is adjusted, and a boot identity that drifts would report a live holder as dead.
+
+Every judgement errs the same way. Getting it wrong towards *alive* costs a wait, which is what happened before any of this existed; getting it wrong towards *gone* puts two bootstraps inside the same directory, which is the failure the lock exists to prevent. So a lock written by an older version of this package — no record at all — is waited on: *I cannot tell who holds this* is not *nobody does*.
+
+### `worktree unlock`
+
+```bash
+worktree unlock <slug> [--all] [--force]
+```
+
+The explicit way out, for the cases the liveness check will not settle: a lock inherited from an older version, a `WORKTREE_HOME` on a network share where the pid belongs to another machine, a `ps` that will not answer.
+
+```
+$ worktree unlock 441
+removed /Users/…/.laravel-worktree/locks/wt-the-desk-441-fix-login.lock, taken by pid 51234 on studio.local (worktree create 441), holding it since 2026-08-01T09:12:44Z, which is not running any more
+```
+
+It names what it is about to remove and who took it, and **refuses a lock whose holder is still running** — that is the one removal that would put two bootstraps in one directory. `--force` overrides it, for the person who has looked at the pid and knows better. A lock the command cannot judge, because its pid belongs to another machine, is refused the same way and for the same reason.
+
+`--all` is machine-wide rather than repository-wide, because the locks are: they hang off `WORKTREE_HOME` rather than off a checkout, and skipping another clone's stale lock would leave behind the thing the command was run to clear. It exits non-zero if it left anything alone, naming it.
+
+Nothing here reads or writes the registry, and nothing here touches a container, a volume or a worktree. A lock is a directory, and this removes it.
 
 ## Configuration
 

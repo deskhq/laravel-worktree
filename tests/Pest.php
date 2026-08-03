@@ -2,10 +2,15 @@
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Console\Output;
+use DeskHQ\LaravelWorktree\Console\ShutdownHandler;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Git\BaseRefs;
 use DeskHQ\LaravelWorktree\Git\Worktrees;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
+use DeskHQ\LaravelWorktree\Registry\Lock;
+use DeskHQ\LaravelWorktree\Registry\Locks;
+use DeskHQ\LaravelWorktree\Registry\Owner;
+use DeskHQ\LaravelWorktree\Support\Machine;
 use DeskHQ\LaravelWorktree\Tests\TestCase;
 use Symfony\Component\Process\Process;
 
@@ -691,6 +696,93 @@ function baseRefsIn(string $cwd, $diagnostics = null): BaseRefs
     $runner = new ProcessRunner(new Output($diagnostics ?? fopen('php://memory', 'w+')));
 
     return new BaseRefs($runner, Anchor::resolve($runner, $cwd));
+}
+
+/**
+ * A lock over $path, with its diagnostics captured.
+ *
+ * Declared here rather than beside the lock cases because more than one file
+ * needs a lock built the same way, and the two dependencies a lock has beyond
+ * its path — where it says what it is waiting for, and the machine it judges a
+ * holder against — are not what any of those cases are about.
+ *
+ * @param  resource|null  $diagnostics
+ */
+function lockAt(string $path, int $attempts = 2, string $contended = 'contended', $diagnostics = null): Lock
+{
+    $output = new Output($diagnostics ?? fopen('php://memory', 'w+'));
+
+    return new Lock($path, $attempts, $contended, $output, machine());
+}
+
+/**
+ * This machine, as a lock reads it.
+ */
+function machine(): Machine
+{
+    return new Machine(new ProcessRunner(new Output(fopen('php://memory', 'w+'))));
+}
+
+/**
+ * Both locks of the home at $home, with their diagnostics thrown away.
+ */
+function locksIn(string $home): Locks
+{
+    $output = new Output(fopen('php://memory', 'w+'));
+
+    return new Locks($home, new ShutdownHandler($output), $output);
+}
+
+/**
+ * A lock directory whose owner record says $record, written the way a run that
+ * won the `mkdir` would have written it.
+ *
+ * @param  array<string, mixed>  $record
+ */
+function lockTakenBy(string $path, array $record): void
+{
+    is_dir($path) || mkdir($path, 0755, true);
+
+    file_put_contents($path.'/'.Owner::File, json_encode($record)."\n");
+}
+
+/**
+ * This run, as an owner record — the holder that is unquestionably alive, which
+ * every case that wants a dead one varies from.
+ *
+ * @param  array<string, mixed>  $overrides
+ * @return array<string, mixed>
+ */
+function ownerRecord(array $overrides = []): array
+{
+    $pid = (int) getmypid();
+
+    return array_replace([
+        'pid' => $pid,
+        'host' => machine()->host(),
+        'boot' => machine()->boot(),
+        'started_at' => machine()->startedAt($pid),
+        'command' => 'worktree create 441',
+        'taken_at' => '2026-08-01T09:12:44Z',
+    ], $overrides);
+}
+
+/**
+ * A pid this machine really had and really does not have any more — which is
+ * the thing a stale lock records, and which no made-up number is.
+ */
+function deadPid(): int
+{
+    $process = new Process([PHP_BINARY, '-r', 'usleep(1000);']);
+    $process->start();
+
+    $pid = $process->getPid();
+
+    $process->wait();
+
+    expect($pid)->not->toBeNull();
+
+    return (int) $pid;
 }
 
 /**
