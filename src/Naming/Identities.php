@@ -69,15 +69,19 @@ final readonly class Identities
         private ?string $configuredSlug,
     ) {}
 
+    /**
+     * @param  Registry|null  $registry  The one the run is already reading; null builds one, for a caller that has none.
+     */
     public static function fromConfiguration(
         Configuration $config,
         Anchor $anchor,
         ProcessRunner $runner,
         Output $output,
+        ?Registry $registry = null,
     ): self {
         return new self(
             $anchor,
-            Registry::fromConfiguration($config),
+            $registry ?? Registry::fromConfiguration($config),
             new Issues($runner, $output, $anchor),
             new PullRequests($runner, $output, $anchor),
             $config->repoSlug,

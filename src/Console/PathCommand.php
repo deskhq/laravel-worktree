@@ -3,13 +3,12 @@
 namespace DeskHQ\LaravelWorktree\Console;
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
-use DeskHQ\LaravelWorktree\Config\Schema;
 use DeskHQ\LaravelWorktree\Exceptions\UsageException;
-use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
-use DeskHQ\LaravelWorktree\Naming\Identities;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
 use DeskHQ\LaravelWorktree\Registry\Entry;
+use DeskHQ\LaravelWorktree\Registry\Fleet;
+use DeskHQ\LaravelWorktree\Registry\ForeignCheckout;
 
 /**
  * Where a worktree is, asked without changing anything.
@@ -56,6 +55,8 @@ final readonly class PathCommand implements Command
         private Output $output,
         private Emitter $emitter,
         private ProcessRunner $runner,
+        /** Never used to release a lock, because this takes none; the fleet asks for one. */
+        private ShutdownHandler $shutdown,
     ) {}
 
     public function name(): string
@@ -86,40 +87,20 @@ final readonly class PathCommand implements Command
             throw new UsageException('path takes one name; given '.implode(' ', $invocation->positional));
         }
 
-        $identities = Identities::fromConfiguration($config, $anchor, $this->runner, $this->output);
-        $entry = $identities->locate($name);
-
-        if ($entry === null) {
-            throw new WorktreeException(
-                'no worktree of '.$identities->repoSlug()." is registered as '$name'; "
-                ."'worktree create $name' makes one, and 'worktree list' shows the ones there are"
-            );
-        }
-
-        $this->refuseForeignCheckout($entry, $anchor->mainRoot);
+        // A key is a Compose project name, so an entry claimed by another
+        // checkout is another checkout's worktree — and handing its path back
+        // would `cd` somebody into a directory this repository does not own.
+        // *This* rather than *it*, because what is in the wrong place is the
+        // command being typed rather than anything it would have destroyed.
+        $entry = Fleet::fromConfiguration($config, $anchor, $this->runner, $this->shutdown, $this->output)->require(
+            $name,
+            ForeignCheckout::because('the worktree it names belongs to that checkout', 'run this from there'),
+            hint: 'create',
+        );
 
         // The one line of this run, and the whole of it.
         $this->emitter->emit($invocation->has(self::Json) ? $entry->toJson() : $entry->path);
 
         return ExitCode::Success;
-    }
-
-    /**
-     * A key is a Compose project name, so an entry claimed by another checkout is
-     * another checkout's worktree — and handing its path back would `cd`
-     * somebody into a directory this repository does not own. Refused with the
-     * words `remove` refuses it in, because it is the same collision.
-     */
-    private function refuseForeignCheckout(Entry $entry, string $repo): void
-    {
-        if ($entry->belongsTo($repo)) {
-            return;
-        }
-
-        throw new WorktreeException(
-            "'$entry->key' is registered to $entry->repo, not to ".rtrim($repo, '/').'; '
-            .'the worktree it names belongs to that checkout — run this from there, '
-            ."or set 'repo_slug' in ".Schema::File.' to tell the two apart'
-        );
     }
 }

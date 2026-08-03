@@ -690,7 +690,15 @@ final class Examination
      */
     private function repoSlug(Configuration $config): string
     {
-        return Identities::fromConfiguration($config, $this->anchor, $this->runner, $this->output)->repoSlug();
+        // Handed the registry this run already has, rather than opening a
+        // second one of its own: a run holds one registry.
+        return Identities::fromConfiguration(
+            $config,
+            $this->anchor,
+            $this->runner,
+            $this->output,
+            $this->registryOf($config),
+        )->repoSlug();
     }
 
     /**

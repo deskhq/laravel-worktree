@@ -5,11 +5,10 @@ namespace DeskHQ\LaravelWorktree\Console;
 use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Exceptions\UsageException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
-use DeskHQ\LaravelWorktree\Naming\Identities;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
+use DeskHQ\LaravelWorktree\Registry\Fleet;
 use DeskHQ\LaravelWorktree\Registry\Liveness;
 use DeskHQ\LaravelWorktree\Registry\Lock;
-use DeskHQ\LaravelWorktree\Registry\Locks;
 use DeskHQ\LaravelWorktree\Registry\Owner;
 
 /**
@@ -92,20 +91,21 @@ final readonly class UnlockCommand implements Command
             );
         }
 
-        $locks = new Locks($config->home, $this->shutdown, $this->output);
+        // The fleet, for the two things this command needs from it and no more:
+        // the key a name implies, and the locks that are out. It is the one
+        // command here that neither reads the registry nor takes a lock — a
+        // lock is a directory, and this removes it.
+        $fleet = Fleet::fromConfiguration($config, $anchor, $this->runner, $this->shutdown, $this->output);
 
-        $targets = $everything
-            ? $locks->taken()
-            : [$locks->worktree(Identities::fromConfiguration($config, $anchor, $this->runner, $this->output)
-                ->identify((string) $name)->key)];
+        $targets = $everything ? $fleet->locksTaken() : [$fleet->lockOn((string) $name)];
 
-        return $this->unlock($targets, $locks, $invocation->has(self::Force), $everything);
+        return $this->unlock($targets, $fleet, $invocation->has(self::Force), $everything);
     }
 
     /**
      * @param  list<Lock>  $targets
      */
-    private function unlock(array $targets, Locks $locks, bool $forced, bool $everything): int
+    private function unlock(array $targets, Fleet $fleet, bool $forced, bool $everything): int
     {
         $removed = 0;
         $refused = 0;
@@ -119,7 +119,7 @@ final readonly class UnlockCommand implements Command
             }
 
             $owner = $lock->owner();
-            $liveness = $owner === null ? null : $owner->liveness($locks->machine());
+            $liveness = $owner === null ? null : $owner->liveness($fleet->machine());
 
             if ($owner !== null && $liveness !== Liveness::Gone && ! $forced) {
                 $this->output->error($this->refusal($lock, $owner, $liveness ?? Liveness::Unknown));

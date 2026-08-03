@@ -153,7 +153,7 @@ final readonly class ListCommand implements Command
         // and asked for only then, because deriving it can fail on a checkout
         // whose directory name slugifies to nothing, and `--all` has no use for
         // it at all.
-        $repoSlug = $everywhere ? null : $this->repoSlug($anchor, $config);
+        $repoSlug = $everywhere ? null : $this->repoSlug($anchor, $config, $registry);
 
         // One scan for the whole run: the column below and the warning at the
         // end are the same query, asked once and shared, rather than a second
@@ -506,8 +506,12 @@ final readonly class ListCommand implements Command
         return $payload;
     }
 
-    private function repoSlug(Anchor $anchor, Configuration $config): string
+    /**
+     * The naming layer reads the registry this run has already read, rather
+     * than opening a second one of its own: a run holds one registry.
+     */
+    private function repoSlug(Anchor $anchor, Configuration $config, Registry $registry): string
     {
-        return Identities::fromConfiguration($config, $anchor, $this->runner, $this->output)->repoSlug();
+        return Identities::fromConfiguration($config, $anchor, $this->runner, $this->output, $registry)->repoSlug();
     }
 }

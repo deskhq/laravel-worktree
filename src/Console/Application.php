@@ -56,7 +56,7 @@ final class Application
 
         return $application
             ->register(new CreateCommand($output, new Emitter, $runner, $shutdown))
-            ->register(new PathCommand($output, new Emitter, $runner))
+            ->register(new PathCommand($output, new Emitter, $runner, $shutdown))
             ->register(new ListCommand($output, new Emitter, $runner))
             ->register(new StopCommand($output, $runner, $shutdown))
             ->register(new StartCommand($output, $runner, $shutdown))

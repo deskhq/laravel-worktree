@@ -56,3 +56,5 @@ Run `composer format` before pushing. CI checks the same thing with `pint --test
 ## Documentation
 
 The README is the design document, not a feature list: it explains *what collides* and *why each decision is the way it is*. If your change makes a statement in it untrue, change the statement in the same pull request.
+
+[`CONTEXT.md`](CONTEXT.md) is the smaller thing underneath it: the words this package uses — *key*, *slot*, *entry*, *fleet*, *orphan* — and what each one is allowed to mean. A concept that needs a new word belongs there before it belongs in a class name.
