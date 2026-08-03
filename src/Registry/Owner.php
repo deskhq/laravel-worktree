@@ -252,6 +252,12 @@ final readonly class Owner
     /**
      * What this run was invoked as, shortened and stripped of anything that
      * would move a terminal's cursor when the next run prints it back.
+     *
+     * The whole invocation rather than the subcommand alone, because *which*
+     * `create` has the lock is the question somebody asks — and it costs
+     * nothing to answer: every argument this binary accepts is a branch name,
+     * an issue number or a declared flag, and the same line is already on the
+     * process table for anyone with `ps`.
      */
     private static function invocation(): string
     {
