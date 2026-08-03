@@ -26,6 +26,7 @@ it('registers a delegator for each command of the host binary', function () {
             'worktree:unlock',
             'worktree:doctor',
             'worktree:init',
+            'worktree:shell-init',
         );
 });
 
@@ -54,6 +55,7 @@ it('reports the containerised refusal for every command', function (string $comm
     ['worktree:unlock', 'unlock'],
     ['worktree:doctor', 'doctor'],
     ['worktree:init', 'init'],
+    ['worktree:shell-init', 'shell-init'],
 ]);
 
 /**
