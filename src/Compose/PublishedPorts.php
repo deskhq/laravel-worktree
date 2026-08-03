@@ -179,8 +179,14 @@ final readonly class PublishedPorts
     /**
      * The name this variable's port would sensibly be given in `ports`:
      * `FORWARD_REDIS_PORT` is asking to be `redis`, and `APP_PORT` `app`.
+     *
+     * Public because a refusal that says *add `redis` to `ports`* and a
+     * `worktree init` that writes the file are the same sentence at two ends of
+     * the same workflow ({@see Derivation}) — and two spellings of this rule
+     * would mean the generated file did not contain the name the refusal asked
+     * for.
      */
-    private static function portName(string $variable): string
+    public static function portName(string $variable): string
     {
         $name = strtolower($variable);
         $name = (string) preg_replace('/\Aforward_/', '', $name);

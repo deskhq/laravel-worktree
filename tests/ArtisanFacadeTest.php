@@ -25,6 +25,7 @@ it('registers a delegator for each command of the host binary', function () {
             'worktree:reap',
             'worktree:unlock',
             'worktree:doctor',
+            'worktree:init',
         );
 });
 
@@ -52,6 +53,7 @@ it('reports the containerised refusal for every command', function (string $comm
     ['worktree:reap', 'reap'],
     ['worktree:unlock', 'unlock'],
     ['worktree:doctor', 'doctor'],
+    ['worktree:init', 'init'],
 ]);
 
 /**
@@ -91,4 +93,5 @@ it('forwards the flags the host binary understands', function (string $command, 
     ['worktree:reap', ['--all' => true, '--dry-run' => true, '--yes' => true], 'reap --all --dry-run --yes'],
     ['worktree:unlock', ['arguments' => ['441'], '--force' => true], 'unlock 441 --force'],
     ['worktree:doctor', ['--json' => true], 'doctor --json'],
+    ['worktree:init', ['--dry-run' => true, '--force' => true], 'init --dry-run --force'],
 ]);

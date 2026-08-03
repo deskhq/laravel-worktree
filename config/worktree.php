@@ -12,6 +12,11 @@
  *
  * Every key below is optional. A repository with no copy of this file at all
  * runs on precisely these values.
+ *
+ * The three keys derived from a repository's own compose.yaml — `ports`, the
+ * port offsets in `env`, and `compose` — can be written for you rather than
+ * worked out by hand: `worktree init` reads that file and generates this one,
+ * comments and all, and refuses to overwrite an existing copy without --force.
  */
 return [
 
