@@ -231,20 +231,6 @@ it('treats being called wrong as a usage error, not a failed run', function (arr
 ]);
 
 /**
- * The registry as this machine now holds it.
- *
- * @return array<string, mixed>
- */
-function registryNow(): array
-{
-    $registry = test()->home.'/registry.json';
-
-    return is_file($registry)
-        ? json_decode((string) file_get_contents($registry), true, flags: JSON_THROW_ON_ERROR)
-        : [];
-}
-
-/**
  * The registry file this machine lost, or that a failed teardown emptied.
  */
 function forgetTheRegistry(): void

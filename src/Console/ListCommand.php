@@ -8,6 +8,7 @@ use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Naming\Identities;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
+use DeskHQ\LaravelWorktree\Registry\DeadEntries;
 use DeskHQ\LaravelWorktree\Registry\Entry;
 use DeskHQ\LaravelWorktree\Registry\Registry;
 use DeskHQ\LaravelWorktree\Runtime\Orphan;
@@ -50,6 +51,26 @@ use DeskHQ\LaravelWorktree\Runtime\Orphans;
  * which is the fastest way to answer "what is holding port 20012?" — that
  * question has no answer inside one repository, because the port it asks about
  * may belong to a clone somebody else's terminal is in.
+ *
+ * ## A row is not a worktree
+ *
+ * An entry whose `path` is not a directory any more claims a slot and a port
+ * block with nothing behind it, and the table used to render it identically to
+ * a healthy one — which is what made "which of these fifty is real?"
+ * unanswerable (#53). It carries a `STATUS` of `gone` instead, from the test
+ * {@see DeadEntries} makes and `reap` sweeps by, so the column and the sweep
+ * cannot disagree about the same fact.
+ *
+ * The column is on the end, where a new one does not move the fields a script
+ * already reads by position, and it is in the piped rendering always: that one
+ * is a contract, and a field that comes and goes is not one. The terminal
+ * rendering carries it only when there is something to say, on the same rule
+ * that drops `BRANCH` — a column of `ok` is width spent on nothing.
+ *
+ * `--json` is deliberately unchanged. Its payload is the registry entry as
+ * `create --json` and `path --json` publish it, and none of the three consults
+ * the disk; a reader that wants this fact has the absolute path and one
+ * `test -d`.
  *
  * ## The warning is the point
  *
@@ -124,6 +145,7 @@ final readonly class ListCommand implements Command
                 ." holds a slot; create one with 'worktree create <slug>'");
         }
 
+        $this->point($entries, $everywhere);
         $this->warn($registry, $repoSlug);
 
         return ExitCode::Success;
@@ -176,7 +198,13 @@ final readonly class ListCommand implements Command
         $style = Style::forStream($this->emitter->isInteractive());
         $root = self::sharedRoot($entries);
 
-        [$headers, $rows] = self::table($entries, $ports, ! self::impliesItsBranches($entries), $root);
+        [$headers, $rows] = self::table(
+            $entries,
+            $ports,
+            ! self::impliesItsBranches($entries),
+            $root,
+            self::holdsADeadEntry($entries),
+        );
 
         // Whole, and never elided to fit: it is the one line here that is prose
         // rather than a row, and a path with its middle taken out is a path
@@ -203,11 +231,25 @@ final readonly class ListCommand implements Command
      * @param  list<string>  $ports
      * @param  bool  $branches  Whether a `BRANCH` column is carried at all.
      * @param  string|null  $root  The directory paths are shown relative to, or null for absolute ones.
+     * @param  bool  $status  Whether a `STATUS` column is carried at all.
      * @return array{list<string>, list<list<string>>}
      */
-    private static function table(array $entries, array $ports, bool $branches = true, ?string $root = null): array
-    {
-        $headers = ['KEY', 'SLOT', ...array_map(strtoupper(...), $ports), ...($branches ? ['BRANCH'] : []), 'PATH'];
+    private static function table(
+        array $entries,
+        array $ports,
+        bool $branches = true,
+        ?string $root = null,
+        bool $status = true,
+    ): array {
+        $headers = [
+            'KEY',
+            'SLOT',
+            ...array_map(strtoupper(...), $ports),
+            ...($branches ? ['BRANCH'] : []),
+            'PATH',
+            ...($status ? ['STATUS'] : []),
+        ];
+
         $rows = [];
 
         foreach ($entries as $entry) {
@@ -223,10 +265,28 @@ final readonly class ListCommand implements Command
                 ...$published,
                 ...($branches ? [$entry->branch] : []),
                 self::under($entry->path, $root),
+                ...($status ? [DeadEntries::status($entry)] : []),
             ];
         }
 
         return [$headers, $rows];
+    }
+
+    /**
+     * Whether any row is a slot with nothing behind it, which is the only thing
+     * a `STATUS` column has to say in the rendering that pays for it in width.
+     *
+     * @param  array<string, Entry>  $entries
+     */
+    private static function holdsADeadEntry(array $entries): bool
+    {
+        foreach ($entries as $entry) {
+            if (DeadEntries::isDead($entry)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -303,6 +363,33 @@ final readonly class ListCommand implements Command
         }
 
         return substr($path, strlen($root) + 1);
+    }
+
+    /**
+     * What to do about the rows marked `gone`, on stderr.
+     *
+     * The column says which; this says what it costs and what reclaims it,
+     * because a marker nobody knows the remedy for is read as decoration. Named
+     * rather than listed: their paths are already on the rows above, and a
+     * second copy between the table and the orphan warning would be the same
+     * fifty lines twice.
+     *
+     * @param  array<string, Entry>  $entries
+     */
+    private function point(array $entries, bool $everywhere): void
+    {
+        $dead = array_keys(array_filter($entries, DeadEntries::isDead(...)));
+
+        if ($dead === []) {
+            return;
+        }
+
+        $sweep = "'worktree reap".($everywhere ? ' --all' : '')."'";
+
+        $this->output->line(count($dead) === 1
+            ? $dead[0]." holds a slot whose worktree directory is gone; $sweep reclaims it"
+            : count($dead).' entries hold slots whose worktree directories are gone: '
+              .implode(', ', $dead)."; $sweep reclaims them");
     }
 
     /**

@@ -13,6 +13,11 @@ use DeskHQ\LaravelWorktree\Console\Output;
  * claimed between the scan and the deletion. The rest is the gate: `--dry-run`
  * reaches no destructive Docker call at all, and a run with no terminal to
  * confirm on exits non-zero having destroyed nothing.
+ *
+ * The sweep has two halves and they meet in one summary and one confirmation:
+ * the projects nothing claims, and the registry entries with nothing behind
+ * them. The second half is asserted against the registry file the run leaves —
+ * a slot given back, or deliberately not.
  */
 beforeEach(function () {
     harness('worktree-reap');
@@ -152,6 +157,184 @@ it('skips a project that was claimed between the scan and the deletion', functio
         // Nothing of the claimed project was touched, not even its Compose down.
         ->not->toContain('compose -p wt-desk-feat-checkout down --volumes --remove-orphans')
         ->not->toContain('volume rm --force checkout-pgsql');
+});
+
+/*
+|--------------------------------------------------------------------------
+| The other half of the sweep
+|--------------------------------------------------------------------------
+|
+| An entry whose worktree directory is gone is claimed, so it is not an orphan;
+| and it is not a worktree, because there is nothing there. It held its slot and
+| its port block for as long as the registry survived, and nothing swept it
+| (#53). Reclaiming one tears its project down first, so it cannot leave a fresh
+| orphan behind.
+|
+*/
+
+it('reclaims an entry whose worktree is gone, taking its project down with it', function () {
+    daemonHolds(['wt-desk-feat-search' => ['containers' => ['search-app'], 'volumes' => ['search-pgsql']]]);
+
+    registryHolds([
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
+        'wt-desk-feat-search' => slotEntry(3, 'feat-search'),
+    ], gone: ['wt-desk-feat-search']);
+
+    $process = worktreeReap(['--yes']);
+
+    expect($process)->toHaveSucceeded()
+        ->and($process->getOutput())->toBe('')
+        ->and($process->getErrorOutput())
+        ->toContain('found 1 registry entry for desk whose worktree is gone:')
+        ->toContain('wt-desk-feat-search  slot 3, '.$this->root.'/desk-worktrees/feat-search')
+        ->toContain('reclaimed 1 registry entry: wt-desk-feat-search (slot 3)')
+        // The teardown as well as the row: an entry with a missing directory
+        // may still have containers and volumes, and dropping the row alone
+        // would convert it into an orphan needing a second reap.
+        ->and(dockerCalls())
+        ->toContain('compose -p wt-desk-feat-search down --volumes --remove-orphans')
+        ->toContain('volume rm --force search-pgsql')
+        ->and(registryNow())->toHaveKey('wt-desk-441-fix-login')
+        ->and(registryNow())->not->toHaveKey('wt-desk-feat-search');
+});
+
+it('leaves the entry alone when its worktree is where it says it is', function () {
+    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login')]);
+
+    $process = worktreeReap(['--yes']);
+
+    expect($process)->toHaveSucceeded()
+        ->and($process->getErrorOutput())->toContain('nothing to reap')
+        ->and(registryNow())->toHaveKey('wt-desk-441-fix-login')
+        ->and(destructiveCalls())->toBe([]);
+});
+
+/**
+ * The scoping question the issue left to be settled: an entry whose whole
+ * *repository* has been deleted can never be reclaimed by a repository-scoped
+ * run, because there is no checkout left to run one from. So it belongs to
+ * nobody, and every run reports it — under a heading of its own, since it is
+ * the case a person has the least context for.
+ */
+it('reports an entry whose repository is gone in any run, and another checkout\'s only under --all', function () {
+    mkdir($this->shop, 0755, true);
+
+    registryHolds([
+        'wt-shop-feat-checkout' => slotEntry(0, 'feat-checkout', repo: $this->shop),
+        'wt-gone-feat-search' => slotEntry(1, 'feat-search', repo: $this->root.'/gone'),
+    ], gone: ['wt-shop-feat-checkout', 'wt-gone-feat-search']);
+
+    $scoped = worktreeReap(['--dry-run']);
+
+    expect($scoped)->toHaveSucceeded()
+        ->and($scoped->getErrorOutput())
+        ->toContain('found 1 registry entry whose repository is gone, so no checkout can claim it:')
+        ->toContain('wt-gone-feat-search  slot 1, '.$this->root.'/gone-worktrees/feat-search, whose checkout '.$this->root.'/gone has gone too')
+        // Another live checkout's, on the other hand, is that checkout's to
+        // reclaim — until this run says it is asking about the machine.
+        ->not->toContain('wt-shop-feat-checkout')
+        ->and(worktreeReap(['--dry-run', '--all'])->getErrorOutput())
+        ->toContain('found 1 registry entry on this machine whose worktree is gone:')
+        ->toContain('wt-shop-feat-checkout')
+        ->toContain('wt-gone-feat-search')
+        // Reported by both runs, reclaimed by neither: --dry-run keeps every
+        // slot it named, as it keeps every volume.
+        ->and(registryNow())->toHaveKeys(['wt-shop-feat-checkout', 'wt-gone-feat-search'])
+        ->and(destructiveCalls())->toBe([]);
+});
+
+/**
+ * Reclaiming ends in a teardown, and a teardown that could not ask anything is
+ * not a teardown that worked — so the slot stays claimed rather than being
+ * given back on the strength of an unreachable daemon.
+ */
+it('reports a dead entry with no daemon to reach, and reclaims nothing', function () {
+    $this->docker = fakeDockerBinary($this->root, daemon: false);
+
+    registryHolds(['wt-desk-feat-search' => slotEntry(3, 'feat-search')], gone: ['wt-desk-feat-search']);
+
+    $process = worktreeReap(['--yes']);
+
+    expect($process)->toHaveExited(1)
+        ->and($process->getErrorOutput())
+        ->toContain('found 1 registry entry for desk whose worktree is gone:')
+        ->toContain('could not confirm that wt-desk-feat-search is gone')
+        ->toContain('there is no Docker daemon answering on this machine')
+        ->and(registryNow())->toHaveKey('wt-desk-feat-search');
+});
+
+/**
+ * The same discipline the orphan half is under, against the other fact a
+ * reclaim turns on: the directory. A `create` that finished between the scan
+ * and the lock coming free has put the worktree back, and its slot is not free
+ * to take.
+ */
+it('skips an entry whose worktree came back between the scan and the reclaim', function () {
+    daemonHolds(['wt-desk-441-fix-login' => ['volumes' => ['441-pgsql']]]);
+
+    registryHolds([
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
+        'wt-desk-feat-search' => slotEntry(3, 'feat-search'),
+    ], gone: ['wt-desk-441-fix-login', 'wt-desk-feat-search']);
+
+    // Made while the run is already going: the fake `docker` creates the
+    // directory the moment the *first* entry's Compose teardown is asked for,
+    // which is after the scan and before the second is looked at.
+    madeDuringTheRun($this->root.'/desk-worktrees/feat-search');
+
+    $process = worktreeReap(['--yes']);
+
+    expect($process)->toHaveSucceeded()
+        ->and($process->getErrorOutput())
+        ->toContain('found 2 registry entries for desk whose worktree is gone:')
+        ->toContain('skipping wt-desk-feat-search: there is a worktree at '.$this->root.'/desk-worktrees/feat-search again')
+        ->toContain('reclaimed 1 registry entry: wt-desk-441-fix-login (slot 0)')
+        ->and(dockerCalls())->not->toContain('compose -p wt-desk-feat-search down --volumes --remove-orphans')
+        // The one that came back kept its slot; the one that did not, did not.
+        ->and(registryNow())->toHaveKey('wt-desk-feat-search')
+        ->and(registryNow())->not->toHaveKey('wt-desk-441-fix-login');
+});
+
+/**
+ * A slot given back over volumes that are still there would leave nothing
+ * naming them — the-desk#1095 from the other end. So the entry stands, and the
+ * next `reap` finds it again.
+ */
+it('keeps the entry when its project would not go, and says why', function () {
+    daemonHolds(['wt-desk-feat-search' => ['volumes' => ['search-pgsql']]], refuses: ['search-pgsql']);
+
+    registryHolds(['wt-desk-feat-search' => slotEntry(3, 'feat-search')], gone: ['wt-desk-feat-search']);
+
+    $process = worktreeReap(['--yes']);
+
+    expect($process)->toHaveExited(1)
+        ->and($process->getErrorOutput())
+        ->toContain('wt-desk-feat-search survived teardown')
+        ->toContain('the entry for wt-desk-feat-search still holds its slot, deliberately')
+        ->and(registryNow())->toHaveKey('wt-desk-feat-search');
+});
+
+it('reports both classes in one summary, under one confirmation', function () {
+    daemonHolds([
+        'wt-desk-441-fix-login' => ['containers' => ['441-app'], 'volumes' => ['441-pgsql']],
+        'wt-desk-feat-search' => ['volumes' => ['search-pgsql']],
+    ]);
+
+    registryHolds(['wt-desk-feat-search' => slotEntry(3, 'feat-search')], gone: ['wt-desk-feat-search']);
+
+    $process = worktreeReap();
+
+    expect($process)->toHaveExited(1)
+        ->and($process->getErrorOutput())
+        ->toContain('found 1 orphaned project for desk:')
+        ->toContain('wt-desk-441-fix-login  1 container, 1 volume')
+        ->toContain('found 1 registry entry for desk whose worktree is gone:')
+        ->toContain('wt-desk-feat-search  slot 3,')
+        // One gate for one reap: releasing a slot is less destructive than
+        // force-deleting a volume and does not get a softer one for it.
+        ->toContain('there is no terminal here to confirm on')
+        ->and(destructiveCalls())->toBe([])
+        ->and(registryNow())->toHaveKey('wt-desk-feat-search');
 });
 
 it('reports under --dry-run without making a single destructive call', function () {
@@ -320,6 +503,21 @@ function claimedDuringTheRun(string $project, array $entry): void
         test()->root.'/fake/hook',
         "cat > '".test()->home."/registry.json' <<'JSON'\n".$registry."\nJSON\n",
     );
+}
+
+/**
+ * Put a worktree directory back in the middle of the run, as a `create` that
+ * finished after the scan would have: the fake `docker` makes it the first time
+ * it is asked to take a project down.
+ *
+ * A hook in the fake for the same reason {@see claimedDuringTheRun()} is one —
+ * a real concurrent `create` would be made to wait on the very lock this is
+ * about, which is the correct behaviour and the reason it could never write in
+ * the window this needs written in.
+ */
+function madeDuringTheRun(string $path): void
+{
+    file_put_contents(test()->root.'/fake/hook', "mkdir -p '$path'\n");
 }
 
 /**

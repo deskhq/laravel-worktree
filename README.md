@@ -166,7 +166,7 @@ A numeric slug is resolved out of the registry rather than through `gh`: `441` b
 
 `--json` emits the registry entry instead, in the shape `create --json` prints it, so a caller that wants the ports does not need `list --json | jq 'select(…)'`.
 
-It does not check that the directory is still there. An entry whose worktree somebody deleted by hand is a real problem, and one `list`, `remove` and this all have — it wants one answer across the three rather than a second vocabulary invented here.
+It does not check that the directory is still there — deliberately, because it is the read-only fast path and the answer to that question lives elsewhere: [`list`](#status-and-the-row-that-is-not-a-worktree) marks such an entry `gone`, and [`reap`](#reaping) reclaims it. One vocabulary across the commands, rather than a second one invented here.
 
 ## Listing
 
@@ -205,6 +205,29 @@ Three things are elided, all of them things the line already says somewhere else
 The width comes from `COLUMNS`, then from `stty`, then from 80. The header is dim, and there is no colour at all under [`NO_COLOR`](https://no-color.org), under `TERM=dumb`, or when stdout is not a terminal.
 
 The port columns are whatever `ports` names, in the order it names them, so a repository that publishes a `meilisearch` port gets a `MEILISEARCH` column without this command knowing anything about it — in both renderings, as is `-` for a port an entry does not hold.
+
+### `STATUS`, and the row that is not a worktree
+
+An entry whose `path` is not a directory any more is holding a slot and a port block with nothing behind it — somebody `rm -rf`'d the worktree, or ran `git worktree remove` directly, or deleted the whole clone. It is not an orphan, because the registry claims it, and it is not a worktree, because there is nothing there. Until it was marked, it rendered exactly like a healthy row, which is what made *which of these fifty is real?* unanswerable:
+
+```
+paths under /Users/agent/www/the-desk-worktrees
+KEY                        SLOT  APP    VITE   REVERB  DB     REDIS  PATH           STATUS
+wt-the-desk-441-fix-login  0     20000  20001  20002   20003  20004  441-fix-login  ok
+wt-the-desk-feat-search    1     20010  20011  20012   20013  20014  feat-search    gone
+```
+
+```
+wt-the-desk-feat-search holds a slot whose worktree directory is gone; 'worktree reap' reclaims it
+```
+
+Two tokens so far, `ok` and `gone`, from the same test [`reap`](#reaping) sweeps by — a column that says an entry is dead and a sweep that then declines to touch it is a column nobody trusts twice. The set is meant to grow, so compare against the token rather than against "not `ok`".
+
+The column is **on the end**, where a column added later does not move the fields a script already reads by position, and the piped rendering always carries it: that one is a contract, and a field that comes and goes is not one. The terminal rendering carries it only when some row has something to say, on the same rule that drops `BRANCH` — a column of `ok` is width spent on nothing.
+
+Nothing here asks Docker, so the marking survives a machine with the daemon closed. The line naming the sweep is on stderr, with the orphan warning, and for the same reason.
+
+`--json` is deliberately unchanged: its payload is the registry entry exactly as `create --json` and `path --json` publish it, and none of the three consults the disk. A reader that wants this fact has the absolute path and one `test -d`.
 
 `php artisan worktree:list` forwards to the binary over a pipe, so it prints the parseable rendering. The facade is a delegator and passes stdout through untouched; `vendor/bin/worktree list` is what a terminal gets the fitted table from.
 
@@ -279,17 +302,41 @@ An entry another checkout holds is refused rather than destroyed — a key is a 
 worktree reap [--all] [--dry-run] [--yes]
 ```
 
-The catch-all `remove` never gets to: a worktree torn down by hand, a teardown interrupted partway, a registry file somebody lost. Each leaves the same thing behind, and before this there was no supported way back to it.
+The catch-all `remove` never gets to, in both directions: a worktree torn down by hand, a teardown interrupted partway, a registry file somebody lost. Each leaves the same thing behind, and before this there was no supported way back to it.
 
 ```
 $ worktree reap
 found 2 orphaned projects for the-desk:
   wt-the-desk-441-fix-login  4 containers, 3 volumes
   wt-the-desk-feat-checkout  0 containers, 3 volumes
+found 1 registry entry for the-desk whose worktree is gone:
+  wt-the-desk-feat-search    slot 3, /Users/agent/www/the-desk-worktrees/feat-search
 destroy these? [y/N]
 ```
 
 **It force-deletes Docker volumes and there is no undo**, so its scoping is the most deliberate thing in the package.
+
+### Two classes, one gate
+
+An **orphan** is a project on the daemon that no registry entry claims, from any checkout. Its mirror image is an **entry whose worktree is gone**: claimed, so it is not an orphan, and empty, so it is not a worktree. It holds its slot and its port block for as long as the registry survives, and nothing swept it before — so `slots` eventually ran out with advice whose honest reading was *raise `slots`*, which grows the leak instead of fixing it. The allocator now says which:
+
+```
+all 50 worktree slots are in use, and 3 of them are held by registry entries whose worktree directory is gone; 'worktree reap' reclaims them, or free one with 'worktree remove <slug>'
+```
+
+Releasing a slot is far less destructive than force-deleting volumes, and it gets **no softer gate** for it: one confirmation for one `reap` is easier to reason about than two, and the two classes are reported separately inside the one summary so that what is about to happen to each is legible.
+
+Reclaiming an entry **tears its project down first**. A worktree whose directory somebody deleted may well still have containers and volumes on the daemon, and dropping the row alone would turn it into an orphan needing a second `reap`. The entry is forgotten only once the teardown proves the project is gone; over a volume that would not go, the entry stands and says so, because a slot given back with volumes still on the disk leaves nothing naming them:
+
+```
+the entry for wt-the-desk-feat-search still holds its slot, deliberately: a slot given back over volumes that are still there would leave nothing naming them
+```
+
+Three decisions worth knowing, since each of them could reasonably have gone the other way:
+
+- **Gone means the directory is not there.** A path that exists but is no longer a git worktree keeps its slot: something is on disk, possibly somebody's uncommitted work, and `worktree remove <slug>` is the command for it — it already works on a directory that was never a worktree at all.
+- **An entry whose *repository* is gone belongs to nobody**, so every run reports it, `--all` or not, under a heading of its own. A repository-scoped run could never reach it otherwise: with the clone deleted there is no checkout left to run `reap` from. Another *live* checkout's entries stay that checkout's, until `--all`.
+- **Nothing reclaims automatically.** An unmounted network volume or a sleeping external disk makes a live worktree look deleted, which is survivable only because every path is named before anything is asked. It is an argument for the gate, not against the sweep.
 
 ### Why the project name, and not a label of our own
 
@@ -322,6 +369,12 @@ skipping wt-the-desk-feat-checkout: a worktree claimed it after the scan — slo
 ```
 
 One key's lock at a time, released before the next is taken, so reaping a machineful of projects does not hold up every unrelated command for the duration.
+
+A dead entry is re-checked the same way, against both facts a reclaim turns on — the registry, re-read under the entry's lock, and the directory, looked at again:
+
+```
+skipping wt-the-desk-feat-search: there is a worktree at /Users/…/the-desk-worktrees/feat-search again — it came back after the scan — so its slot is not free to reclaim
+```
 
 A volume that would not go is named and exits non-zero, as it does in `remove`. Nothing to reap is a clean exit 0 — and a daemon that could not be reached says *that*, rather than reporting a machine with nothing on it, because an unanswered daemon proves nothing about what is on its disk.
 

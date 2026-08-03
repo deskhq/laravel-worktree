@@ -2,6 +2,8 @@
 
 namespace DeskHQ\LaravelWorktree\Runtime;
 
+use DeskHQ\LaravelWorktree\Console\Manifest;
+
 /**
  * One Compose project this package created and no longer accounts for.
  *
@@ -42,23 +44,22 @@ final readonly class Orphan
      * Built here rather than by either caller, so what `list` warns about and
      * what `reap` asks permission to destroy are the same lines — a manifest
      * that reads differently from the warning that sent you to it is a manifest
-     * somebody has to reconcile by eye before answering `y`.
+     * somebody has to reconcile by eye before answering `y`. The layout is
+     * {@see Manifest}'s, shared with the dead registry entries `reap` reports
+     * beneath these.
      *
      * @param  list<self>  $orphans
      * @return list<string>
      */
     public static function manifest(array $orphans): array
     {
-        if ($orphans === []) {
-            return [];
+        $items = [];
+
+        foreach ($orphans as $orphan) {
+            $items[$orphan->project] = $orphan->describe();
         }
 
-        $width = max(array_map(fn (self $orphan): int => strlen($orphan->project), $orphans));
-
-        return array_map(
-            fn (self $orphan): string => '  '.str_pad($orphan->project, $width + 2).$orphan->describe(),
-            $orphans,
-        );
+        return Manifest::lines($items);
     }
 
     private static function count(int $total, string $noun): string

@@ -840,20 +840,61 @@ function withEnvironment(array $environment, Closure $work): mixed
 }
 
 /**
- * The registry as this machine holds it.
+ * The registry as this machine holds it, and the worktrees it says are there.
  *
  * Written rather than created by `create`: what `list` reads and what `reap`
  * checks itself against is a file, and a case that had to bootstrap five
  * worktrees to show five rows would be testing `create` again.
  *
+ * The directories are made because an entry claims one, and `list` and `reap`
+ * both now ask the disk whether it is really there (#53) — so a fixture that
+ * wrote only the file would be declaring five dead entries without meaning to.
+ * A case that wants one says which, by key, and gets exactly the state a
+ * `rm -rf` leaves: the row, with nothing behind it.
+ *
  * @param  array<string, array<string, mixed>>  $entries
+ * @param  list<string>  $gone  Keys whose worktree directory is not to exist.
  */
-function registryHolds(array $entries): void
+function registryHolds(array $entries, array $gone = []): void
 {
     file_put_contents(
         test()->home.'/registry.json',
         json_encode($entries === [] ? new stdClass : $entries, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n",
     );
+
+    foreach ($entries as $key => $entry) {
+        $path = $entry['path'] ?? null;
+
+        if (! is_string($path)) {
+            continue;
+        }
+
+        // Removed rather than merely not made, so that a case declaring the
+        // same registry twice — once whole, once with a worktree gone — gets
+        // the state it asked for both times.
+        if (in_array($key, $gone, true)) {
+            deleteDirectory($path);
+
+            continue;
+        }
+
+        is_dir($path) || mkdir($path, 0755, true);
+    }
+}
+
+/**
+ * The registry as this machine now holds it — what a run that was supposed to
+ * free a slot, or to leave one alone, is asserted against.
+ *
+ * @return array<string, mixed>
+ */
+function registryNow(): array
+{
+    $registry = test()->home.'/registry.json';
+
+    return is_file($registry)
+        ? (array) json_decode((string) file_get_contents($registry), true, flags: JSON_THROW_ON_ERROR)
+        : [];
 }
 
 /**
