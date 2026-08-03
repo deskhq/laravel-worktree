@@ -47,7 +47,9 @@ it('lists every command it dispatches, with what each one takes', function () {
         ->toContain('remove <slug>')
         ->toContain('reap [--all] [--dry-run] [--yes]')
         ->toContain('unlock <slug> [--all] [--force]')
-        ->toContain('doctor [--json]');
+        ->toContain('doctor [--json]')
+        ->toContain('init [--dry-run] [--force]')
+        ->toContain('shell-init [bash|zsh]');
 });
 
 it('refuses to run inside the container and creates nothing', function () {

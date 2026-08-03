@@ -9,6 +9,7 @@ use DeskHQ\LaravelWorktree\Commands\ListCommand;
 use DeskHQ\LaravelWorktree\Commands\PathCommand;
 use DeskHQ\LaravelWorktree\Commands\ReapCommand;
 use DeskHQ\LaravelWorktree\Commands\RemoveCommand;
+use DeskHQ\LaravelWorktree\Commands\ShellInitCommand;
 use DeskHQ\LaravelWorktree\Commands\StartCommand;
 use DeskHQ\LaravelWorktree\Commands\StopCommand;
 use DeskHQ\LaravelWorktree\Commands\UnlockCommand;
@@ -33,6 +34,7 @@ class LaravelWorktreeServiceProvider extends PackageServiceProvider
                 UnlockCommand::class,
                 DoctorCommand::class,
                 InitCommand::class,
+                ShellInitCommand::class,
             ]);
     }
 

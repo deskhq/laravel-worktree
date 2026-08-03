@@ -412,6 +412,15 @@ function worktreeInit(array $arguments = [], array $env = []): Process
 }
 
 /**
+ * @param  list<string>  $arguments
+ * @param  array<string, string|false>  $env
+ */
+function worktreeShellInit(array $arguments = [], ?string $cwd = null, array $env = []): Process
+{
+    return worktree(['shell-init', ...$arguments], cwd: $cwd, env: $env);
+}
+
+/**
  * An application shaped like the one `sail install` writes, carrying every case
  * the derivation and the pre-flight have to tell apart: both `depends_on`
  * spellings, a service reached only through another's, a literal host port, a

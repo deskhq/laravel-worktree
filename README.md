@@ -26,7 +26,7 @@ This is the first thing worth understanding, because it is otherwise the first i
 
 The implementation is a binary — `vendor/bin/worktree` — and not `php artisan worktree:create`. Under Sail, artisan runs **inside the app container**, and from in there every single thing this package needs is unreachable: there is no Docker socket to create containers with, no host git to add a worktree to, no sibling worktrees directory, and no way to bind a host port. A worktree also has no `vendor/` at the moment it is created, so there is no application to boot and no artisan to run in the first place.
 
-`php artisan worktree:{create,path,list,stop,start,remove,reap,unlock,doctor}` do exist, as a facade. Called from inside the container they refuse and tell you what to run instead:
+`php artisan worktree:{create,path,list,stop,start,remove,reap,unlock,doctor,init,shell-init}` do exist, as a facade. Called from inside the container they refuse and tell you what to run instead:
 
 ```
 worktree must run on the host, not inside the container.
@@ -71,6 +71,14 @@ Either way, `config/worktree.php` is the real documentation for this package —
 
 For a fully worked example rather than a commented blank, see [`stubs/worktree-example.php`](stubs/worktree-example.php) — the real configuration of the application this package was extracted from, including its eleven-step bootstrap. A test in this package's own suite loads it through the same validator the binary uses, so it cannot quietly stop being legal.
 
+One more line, in `~/.zshrc` or `~/.bashrc`, and worth it on the first day rather than the fiftieth:
+
+```bash
+eval "$(./vendor/bin/worktree shell-init)"
+```
+
+That installs a `wt` function — `wt 441` enters a worktree — and completion for the slugs this machine holds: [what it emits, and why it is generated rather than shipped as a file](#the-wt-function-and-completion).
+
 There is also an escape-hatch script to publish, once you need one:
 
 ```bash
@@ -93,6 +101,7 @@ cd "$(./vendor/bin/worktree create 441)"   # enter a worktree, making it if it i
 ./vendor/bin/worktree unlock 441
 ./vendor/bin/worktree doctor            # every pre-flight a create makes, creating nothing
 ./vendor/bin/worktree init              # write config/worktree.php from this repository's compose.yaml
+eval "$(./vendor/bin/worktree shell-init)"   # a `wt` function and completion, for your rc file
 ```
 
 The first two lines look alike and are not. `create` is the **write path**: it takes the worktree's lock for the whole run, retries whatever is recorded as degraded, verifies `HEAD`, and bootstraps a worktree for a slug it has never seen — which is right when you are entering one, and wrong when a script only wanted the directory. `path` is the read: no lock, no Docker, no `gh`, nothing written, and a typo'd slug is an exit code rather than five minutes of Docker and a slot. Scripts and shell functions want `path`.
@@ -161,9 +170,9 @@ The absolute path on stdout and nothing else, exit 0. A slug nothing holds is ex
 
 ```bash
 worktree path 441 || echo "not created yet"
-
-wt() { cd "$(worktree path "$1")" || return; }
 ```
+
+It is also what the `wt` function is built out of — [`worktree shell-init`](#the-wt-function-and-completion) writes that one for you, with completion.
 
 It is the read-only counterpart of `create`, and everything it declines to do is deliberate:
 
@@ -179,6 +188,42 @@ A numeric slug is resolved out of the registry rather than through `gh`: `441` b
 `--json` emits the registry entry instead, in the shape `create --json` prints it, so a caller that wants the ports does not need `list --json | jq 'select(…)'`.
 
 It does not check that the directory is still there — deliberately, because it is the read-only fast path and the answer to that question lives elsewhere: [`list`](#status-and-age-or-what-is-actually-there) marks such an entry `gone`, and [`reap`](#reaping) reclaims it. One vocabulary across the commands, rather than a second one invented here.
+
+## The `wt` function, and completion
+
+```bash
+eval "$(./vendor/bin/worktree shell-init)"   # in ~/.zshrc or ~/.bashrc
+```
+
+That is the whole install. `shell-init` prints a script — for `bash` or `zsh`, named as an argument or taken from `$SHELL` — and the script installs two things.
+
+**A `wt` function**, because the usage line this README opens with is thirty-eight characters of ceremony around one argument, typed several times a day, from directories where the relative path to the binary is different each time:
+
+| | |
+| --- | --- |
+| `wt` | prints the list |
+| `wt <slug>` | `cd`s into that worktree |
+| `wt -c\|--create <slug> [base]` | makes it if it is not there, then `cd`s into it |
+
+`wt <slug>` is `worktree path` and never `worktree create`: a `cd` that can start a five-minute bootstrap on a typo is a trap, so creating is something you ask for. A slug that resolves to nothing gets the lookup's message, the list, and a non-zero exit — and nothing on disk. Anything else is `worktree <command>`: the function refuses an option it does not know rather than forwarding it, because the moment it forwards one it owns a second copy of the binary's argument parsing.
+
+**Completion**, on both names: command names, each command's flags, and the slugs the registry holds. That last one is the point of the whole exercise — those names are long, generated from issue titles, and nobody remembers whether it was `441-fix-login` or `441-login-fix`.
+
+### Where completion gets its slugs
+
+From `${WORKTREE_HOME:-$HOME/.laravel-worktree}/registry.json`, read with `awk`, and never through the binary. Asking the binary would cost a PHP start, an anchor, a config read and a daemon query on every press of the Tab key, and a completion that takes 300ms is a completion people turn off. The registry is written atomically by one class, so a reader sees the whole of one registry or the whole of the next.
+
+It is scoped to the repository the cursor is in whenever `git` can say which one that is: the registry is machine-global and `worktree path` refuses an entry belonging to another checkout, so offering those would be offering completions that cannot work. From no repository at all, every slug is offered rather than none.
+
+### Generated, not shipped
+
+There is no completion file to install and no second step after `composer require`: the script is emitted by the binary, so it names the commands and the flags *that* binary has. Re-run the `eval` after upgrading the package.
+
+The binary's own absolute path is baked into the script, which is what makes `wt` work from anywhere — including from `~`, where the failure is then this package's own message rather than `command not found`. `WORKTREE_BIN` overrides it, for a checkout that has moved.
+
+Under zsh, put the `eval` **after** `compinit`. Sourced before it, the script binds nothing rather than failing every new shell — you get a working `wt` and no completion.
+
+`shell-init` is the one command whose stdout is an entire script, and that is the same contract the rest of them hold to rather than an exception to it: it is read by `eval`, which is a machine. It writes nothing to stderr at all, because the ordinary way to run it is from an rc file, and a note there is a note on every new terminal for the rest of the machine's life.
 
 ## Listing
 

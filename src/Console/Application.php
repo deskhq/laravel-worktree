@@ -20,12 +20,16 @@ use DeskHQ\LaravelWorktree\Support\ContainerRefusal;
  * released however it ends, the repository has been anchored, and its
  * configuration has been read and understood.
  *
- * The last of those is the only one a command may decline ({@see Diagnostic}),
- * and exactly one does: `doctor` reports on a configuration that would not load
- * rather than ending with it.
+ * The last two are the ones a command may decline, and two of them do. A
+ * {@see Diagnostic} runs against a configuration that would not load, because
+ * that failure is its subject rather than its end: `doctor` reports on it, and
+ * `init` is how you get out of it. A {@see Rootless} command needs no repository
+ * under it at all — `shell-init` is evaluated from an rc file, which runs in `~`.
  *
  * The usage text is built from the commands registered below, so a command that
- * exists is a command that is listed — there is no second place to update.
+ * exists is a command that is listed — there is no second place to update. The
+ * shell completion is written from the same list ({@see specifications()}), so
+ * it is a command that completes, too.
  */
 final class Application
 {
@@ -60,7 +64,11 @@ final class Application
             ->register(new ReapCommand($output, $runner, $shutdown, new Confirmation($output)))
             ->register(new UnlockCommand($output, $runner, $shutdown))
             ->register(new DoctorCommand($output, new Emitter, $runner, $shutdown))
-            ->register(new InitCommand($output, new Emitter));
+            ->register(new InitCommand($output, new Emitter))
+            // Handed the application it is being registered into: the completion
+            // it emits is written out of the commands above, so a command added
+            // next month completes without anybody maintaining a second list.
+            ->register(new ShellInitCommand(new Emitter, $application));
     }
 
     public function register(Command $command): self
@@ -108,6 +116,14 @@ final class Application
         }
 
         try {
+            // Before the anchor, for the one command that has to work in `~`:
+            // an rc file evaluating `shell-init` is in no repository, and a
+            // refusal there would be the package failing at the one moment it
+            // is supposed to be invisible ({@see Rootless}).
+            if ($command instanceof Rootless) {
+                return $command->emit($arguments);
+            }
+
             $anchor = Anchor::resolve($this->runner, $this->workingDirectory());
 
             try {
@@ -137,6 +153,20 @@ final class Application
 
             return ExitCode::Failure;
         }
+    }
+
+    /**
+     * What each command is called, and what it takes, as `name => spec`.
+     *
+     * The same pairs the usage text is built from, read by `shell-init` to write
+     * a completion: a command that exists is a command that is listed, and now
+     * also a command that completes.
+     *
+     * @return array<string, string>
+     */
+    public function specifications(): array
+    {
+        return array_map(fn (Command $command): string => $command->usage()[0], $this->commands);
     }
 
     private function workingDirectory(): string
