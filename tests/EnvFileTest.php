@@ -1,6 +1,7 @@
 <?php
 
 use DeskHQ\LaravelWorktree\Config\EnvFile;
+use DeskHQ\LaravelWorktree\Config\Preference;
 use DeskHQ\LaravelWorktree\Console\Output;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Naming\Identity;
@@ -292,7 +293,7 @@ function worktreeFixture(?string $env = null, ?string $example = null): array
     }
 
     if ($example !== null) {
-        file_put_contents($path.'/'.EnvFile::Example, $example);
+        file_put_contents($path.'/'.Preference::Example, $example);
     }
 
     return [

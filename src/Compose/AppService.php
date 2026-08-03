@@ -3,8 +3,7 @@
 namespace DeskHQ\LaravelWorktree\Compose;
 
 use DeskHQ\LaravelWorktree\Config\Assignments;
-use DeskHQ\LaravelWorktree\Config\Env;
-use DeskHQ\LaravelWorktree\Config\EnvFile;
+use DeskHQ\LaravelWorktree\Config\Preference;
 
 /**
  * What this application calls its app service.
@@ -42,26 +41,18 @@ final readonly class AppService
      * The same question asked of a checkout rather than of a file, for the
      * moment before the worktree exists to have one.
      *
-     * The candidates are {@see EnvFile}'s, in its order and for its reason:
-     * `bin/sail` sources `.env.<APP_ENV>` in preference to `.env` when the
-     * *shell* exported one, and a repository that ships neither still has an
-     * `.env.example` that says what it calls the service.
+     * The candidates are {@see Preference}'s, by construction rather than by a
+     * docblock claiming so (#76): `bin/sail` sources `.env.<APP_ENV>` in
+     * preference to `.env` when the *shell* exported one, and a repository that
+     * ships neither still has an `.env.example` that says what it calls the
+     * service. The example searched is this checkout's, because the moment this
+     * answers for is the one before there is a worktree to carry one.
      */
     public static function at(string $root): string
     {
-        $exported = Env::exportedEnvironment();
+        $path = Preference::exported()->pathIn($root, exampleIn: $root);
 
-        $candidates = $exported === null ? [] : ['.env.'.$exported];
-        $candidates[] = '.env';
-        $candidates[] = EnvFile::Example;
-
-        foreach ($candidates as $name) {
-            if (is_file($root.'/'.$name)) {
-                return self::in(Assignments::read($root.'/'.$name));
-            }
-        }
-
-        return self::Default;
+        return $path === null ? self::Default : self::in(Assignments::read($path));
     }
 
     private function __construct() {}
