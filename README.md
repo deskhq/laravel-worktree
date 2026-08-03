@@ -55,13 +55,19 @@ No `jq`. The bash original this replaces needed it; nothing here does.
 composer require --dev deskhq/laravel-worktree
 ```
 
-That installs the host binary at `vendor/bin/worktree`. Publish the config with:
+That installs the host binary at `vendor/bin/worktree`. Then generate the config from your own `compose.yaml`:
+
+```bash
+./vendor/bin/worktree init
+```
+
+That writes `config/worktree.php` with this repository's ports, offsets and overrides already worked out — [what it derives, and what it cannot](#generating-the-config). To get the commented blank instead, publish it:
 
 ```bash
 php artisan vendor:publish --tag="worktree-config"
 ```
 
-The published `config/worktree.php` is the real documentation for this package — every key is commented where it sits, along with the traps that are not obvious until they have cost you an afternoon. A repository that publishes nothing at all still runs, on the defaults that file documents.
+Either way, `config/worktree.php` is the real documentation for this package — every key is commented where it sits, along with the traps that are not obvious until they have cost you an afternoon, and `init` keeps every one of those comments in what it generates. A repository that publishes nothing at all still runs, on the defaults that file documents.
 
 For a fully worked example rather than a commented blank, see [`stubs/worktree-example.php`](stubs/worktree-example.php) — the real configuration of the application this package was extracted from, including its eleven-step bootstrap. A test in this package's own suite loads it through the same validator the binary uses, so it cannot quietly stop being legal.
 
@@ -86,6 +92,7 @@ cd "$(./vendor/bin/worktree create 441)"   # enter a worktree, making it if it i
 ./vendor/bin/worktree reap
 ./vendor/bin/worktree unlock 441
 ./vendor/bin/worktree doctor            # every pre-flight a create makes, creating nothing
+./vendor/bin/worktree init              # write config/worktree.php from this repository's compose.yaml
 ```
 
 The first two lines look alike and are not. `create` is the **write path**: it takes the worktree's lock for the whole run, retries whatever is recorded as degraded, verifies `HEAD`, and bootstraps a worktree for a slug it has never seen — which is right when you are entering one, and wrong when a script only wanted the directory. `path` is the read: no lock, no Docker, no `gh`, nothing written, and a typo'd slug is an exit code rather than five minutes of Docker and a slot. Scripts and shell functions want `path`.
@@ -590,6 +597,55 @@ Which makes it a CI job worth having. `compose.yaml` gaining a published port no
 
 A runner with no Docker daemon still checks everything that is pure computation, and says so about the rest.
 
+## Generating the config
+
+```bash
+worktree init [--dry-run] [--force]
+```
+
+`config/worktree.php` asks you to work three things out from your `compose.yaml`: which ports to name in `ports`, which `FORWARD_*_PORT` variables to offset in `env` for every service the worktree actually starts, and which of them cannot be offset that way and need a `compose.port_overrides` entry instead. That is a derivation against a file the package can read, using a rule [the package already implements](#the-published-port-pre-flight) — and a mistake in it surfaces minutes into a bootstrap, on somebody's *second* worktree.
+
+So it is turned around. `init` runs the same walk the pre-flight runs, and spends it on a configuration instead of on an error message:
+
+```
+$ worktree init
+worktree init — /Users/agent/the-desk
+
+  compose.yaml    laravel.test, pgsql, redis, reverb, mailpit  (5 services started)
+  ports           app, vite, db, redis, reverb, mailpit, mailpit_8025  (port_stride 10)
+  env             APP_PORT, VITE_PORT, FORWARD_DB_PORT, FORWARD_REDIS_PORT, COMPOSE_PROJECT_NAME, APP_URL, REVERB_PORT
+  keep_services   pgsql, redis, reverb, mailpit
+  port_overrides  mailpit, reverb
+  steps           none — the bootstrap recipe is the one part nothing can derive
+
+config/worktree.php written; 'worktree doctor' checks it against this machine
+```
+
+| What it writes | Where it comes from |
+| --- | --- |
+| `ports` | the host side of every `ports:` mapping of every service a worktree would start, named the way a refusal asks for it to be named — `FORWARD_REDIS_PORT` → `redis` |
+| `env` | a `{{port.*}}` for each of those, plus `COMPOSE_PROJECT_NAME` and an `APP_URL` on the app service's own port |
+| `compose.port_overrides` | the mappings `.env` cannot move: [trap 1](#two-traps) variables, pinned inside and remapped outside, and literal host ports, which have no variable to assign |
+| `compose.keep_services` | what the app service actually depends on |
+| `port_stride` | at least the length of the `ports` list, which is otherwise a rule you are asked to enforce yourself |
+| everything else | the published defaults, comments and all |
+
+The generated file **is** the published one — the same blocks, in the same order, saying the same things — with those values written into it. The comments are the part nobody can re-derive, and a generator that emitted a bare array would hand you a file you could not edit without coming back here.
+
+### What it cannot know, and does not guess
+
+- **The bootstrap recipe.** `steps` is left empty, with its examples still commented out. Nothing about a Compose file says how an application installs itself.
+- **Which services to do without.** `MAIL_MAILER=log` and `SCOUT_DRIVER=collection` point a worktree away from services it does not need, and that is a decision about the application rather than a fact about `compose.yaml`. The commented examples are emitted; nothing is guessed.
+- **What the recipe will start.** A service brought up by a bootstrap step — `sail up -d reverb`, and the redis it drags in behind it — is invisible until that step exists, so the first `init` sees a smaller closure than the eventual truth. That is exactly what the pre-flight catches later, and the generated file says so where it will be read: run `init` again once `steps` is written, and `doctor` says whether the difference matters.
+
+### It refuses to overwrite, and checks what it wrote
+
+An existing `config/worktree.php` is not replaced without `--force`, because that file usually carries a `steps` recipe and nothing derived can reproduce one. `--dry-run` prints the file to stdout instead of writing it, which is the one to reach for on every run after the first: diff the two and move across what is worth keeping.
+
+Before anything is written, the derived values go through the config validator and then through [the pre-flight they came from](#the-published-port-pre-flight). A generated file that would not survive a `create` is a bug in `init`, and it says so in those words rather than leaving you to meet it as a refusal against a file you were told to trust.
+
+`php artisan worktree:init` is the same command through the facade, and like the rest of it, it runs on the host and refuses from inside the container.
+
 ## Configuration
 
 Everything is optional. A repository with no `config/worktree.php` runs on the defaults below.
@@ -835,6 +891,8 @@ A refusal rather than a warning, because a warning here is one nobody reads unti
 The check is pure parsing: no daemon, nothing to start, and no cost to a create that passes it. Two limits follow from that. `include:` and `extends:` are not followed, so a service reached only through one of those is invisible to it. And profiles are modelled only far enough to keep a bare `sail up -d` from counting a profiled service as started.
 
 Because it is pure parsing, it does not need a create to run at all: [`worktree doctor`](#checking-all-of-it-without-creating-anything) makes exactly this check, with exactly this message, against a repository nobody has bootstrapped yet.
+
+And it runs in the other direction too. Refusing a wrong configuration is half of *the package owns its own correctness*; writing the right one is the other half, out of the same walk over the same file — which is what [`worktree init`](#generating-the-config) is.
 
 ### Not `compose.override.yaml`
 

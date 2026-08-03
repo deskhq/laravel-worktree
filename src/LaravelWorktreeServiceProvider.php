@@ -4,6 +4,7 @@ namespace DeskHQ\LaravelWorktree;
 
 use DeskHQ\LaravelWorktree\Commands\CreateCommand;
 use DeskHQ\LaravelWorktree\Commands\DoctorCommand;
+use DeskHQ\LaravelWorktree\Commands\InitCommand;
 use DeskHQ\LaravelWorktree\Commands\ListCommand;
 use DeskHQ\LaravelWorktree\Commands\PathCommand;
 use DeskHQ\LaravelWorktree\Commands\ReapCommand;
@@ -31,6 +32,7 @@ class LaravelWorktreeServiceProvider extends PackageServiceProvider
                 ReapCommand::class,
                 UnlockCommand::class,
                 DoctorCommand::class,
+                InitCommand::class,
             ]);
     }
 

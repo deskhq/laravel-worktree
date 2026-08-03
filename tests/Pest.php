@@ -403,6 +403,67 @@ function worktreeDoctor(array $arguments = [], array $env = []): Process
 }
 
 /**
+ * @param  list<string>  $arguments
+ * @param  array<string, string|false>  $env
+ */
+function worktreeInit(array $arguments = [], array $env = []): Process
+{
+    return worktree(['init', ...$arguments], env: $env);
+}
+
+/**
+ * An application shaped like the one `sail install` writes, carrying every case
+ * the derivation and the pre-flight have to tell apart: both `depends_on`
+ * spellings, a service reached only through another's, a literal host port, a
+ * service that publishes nothing, and one behind a profile.
+ *
+ * Declared here rather than beside the pre-flight cases because `worktree init`
+ * derives a configuration from exactly the file the pre-flight then checks, and
+ * the two are only worth asserting against the same application — a fixture only
+ * one file declares is a fixture that is missing whenever that file is not the
+ * one being run.
+ */
+function sailCompose(): string
+{
+    return <<<'YAML'
+    services:
+        laravel.test:
+            ports:
+                - '${APP_PORT:-80}:80'
+                - '${VITE_PORT:-5173}:${VITE_PORT:-5173}'
+            depends_on:
+                - pgsql
+                - meilisearch
+        pgsql:
+            ports:
+                - '${FORWARD_DB_PORT:-5432}:5432'
+        redis:
+            ports:
+                - '${FORWARD_REDIS_PORT:-6379}:6379'
+        reverb:
+            ports:
+                - '${REVERB_PORT:-8080}:8080'
+            depends_on:
+                redis:
+                    condition: service_started
+        meilisearch:
+            ports:
+                - '${FORWARD_MEILISEARCH_PORT:-7700}:7700'
+        mailpit:
+            ports:
+                - '${FORWARD_MAILPIT_PORT:-1025}:1025'
+                - '8025:8025'
+        selenium:
+            image: selenium/standalone-chromium
+        typesense:
+            profiles:
+                - typesense
+            ports:
+                - '${FORWARD_TYPESENSE_PORT:-8108}:8108'
+    YAML;
+}
+
+/**
  * The main checkout the command cases run from: a repository with a compose
  * file, one commit, and a `.env` of the shape a Laravel application has.
  */

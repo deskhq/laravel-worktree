@@ -59,7 +59,8 @@ final class Application
             ->register(new RemoveCommand($output, $runner, $shutdown))
             ->register(new ReapCommand($output, $runner, $shutdown, new Confirmation($output)))
             ->register(new UnlockCommand($output, $runner, $shutdown))
-            ->register(new DoctorCommand($output, new Emitter, $runner, $shutdown));
+            ->register(new DoctorCommand($output, new Emitter, $runner, $shutdown))
+            ->register(new InitCommand($output, new Emitter));
     }
 
     public function register(Command $command): self

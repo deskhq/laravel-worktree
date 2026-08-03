@@ -33,6 +33,17 @@ final readonly class Publication
         public string $mapping,
         /** The variable the host side reads, or null when it is a literal port. */
         public ?string $variable,
+        /**
+         * The container side, as the file writes it: `6379`, `53/udp`.
+         *
+         * Read for the two things that have to say it back. The inner port is
+         * what trap 1 pins — `REVERB_PORT` is 8080 inside the container however
+         * the host side moves — and it is the right-hand side of the mapping a
+         * `compose.port_overrides` entry replaces it with ({@see Derivation}).
+         * A port nothing publishes on the host has none of that to answer for,
+         * which is why this is only ever read alongside a host side.
+         */
+        public string $container,
     ) {}
 
     /**
@@ -78,7 +89,11 @@ final readonly class Publication
             return null;
         }
 
-        return new self($mapping, self::variableIn($segments[count($segments) - 2]));
+        return new self(
+            $mapping,
+            self::variableIn($segments[count($segments) - 2]),
+            $segments[count($segments) - 1],
+        );
     }
 
     /**
@@ -97,7 +112,32 @@ final readonly class Publication
 
         // Inline, because this ends up on one line of a refusal alongside the
         // short-syntax mappings it has to read as a sibling of.
-        return new self(rtrim(Yaml::dump($entry, 0)), self::variableIn((string) $published));
+        return new self(
+            rtrim(Yaml::dump($entry, 0)),
+            self::variableIn((string) $published),
+            self::target($entry, (string) $published),
+        );
+    }
+
+    /**
+     * The container side of a long-syntax mapping, written the way the short
+     * syntax would have written it: `80`, `53/udp`.
+     *
+     * `target` is required by Compose, so an entry without one is a file
+     * Compose itself would reject; the host side is used rather than invented,
+     * so that a mapping this cannot read still round-trips as itself.
+     *
+     * @param  array<mixed>  $entry
+     */
+    private static function target(array $entry, string $published): string
+    {
+        $target = $entry['target'] ?? null;
+        $container = is_string($target) || is_int($target) ? (string) $target : $published;
+        $protocol = $entry['protocol'] ?? null;
+
+        return is_string($protocol) && $protocol !== '' && $protocol !== 'tcp'
+            ? $container.'/'.$protocol
+            : $container;
     }
 
     /**
