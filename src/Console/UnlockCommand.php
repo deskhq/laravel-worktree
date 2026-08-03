@@ -109,6 +109,7 @@ final readonly class UnlockCommand implements Command
     {
         $removed = 0;
         $refused = 0;
+        $missed = 0;
 
         foreach ($targets as $lock) {
             if (! $lock->exists()) {
@@ -128,10 +129,14 @@ final readonly class UnlockCommand implements Command
             }
 
             if (! $lock->breakOpen($owner)) {
-                $this->output->line(
-                    $lock->path().' changed while it was being removed — something has taken it since, '
-                    .'so nothing was removed'
+                // Not a refusal — nobody decided anything — but not a removal
+                // either, and the lock the command was asked to clear is still
+                // there. It counts against the exit code for that reason alone.
+                $this->output->error(
+                    $lock->path().' is still there: either something took it while it was being removed, '
+                    .'or this run may not write in '.dirname($lock->path())
                 );
+                $missed++;
 
                 continue;
             }
@@ -140,7 +145,7 @@ final readonly class UnlockCommand implements Command
             $removed++;
         }
 
-        return $this->report($removed, $refused, $targets === [] && $everything);
+        return $this->report($removed, $refused, $missed, $targets === [] && $everything);
     }
 
     /**
@@ -168,24 +173,23 @@ final readonly class UnlockCommand implements Command
                 : 'which this run was told to remove regardless')));
     }
 
-    private function report(int $removed, int $refused, bool $nothingAtAll): int
+    private function report(int $removed, int $refused, int $missed, bool $nothingAtAll): int
     {
         if ($nothingAtAll) {
             $this->output->line('no lock is held on this machine');
         }
 
-        if ($refused === 0) {
-            return ExitCode::Success;
+        if ($refused > 0) {
+            $this->output->line(
+                $refused.' of them '.($refused === 1 ? 'was' : 'were').' left alone'
+                .($removed === 0 ? '' : ", and $removed removed").'; --force removes '
+                .($refused === 1 ? 'it' : 'them').' regardless'
+            );
         }
 
-        // Non-zero, and named rather than counted: the run did not do what it
-        // was asked, and what a person does next is look at the pid it printed.
-        $this->output->line(
-            $refused.' of them '.($refused === 1 ? 'was' : 'were').' left alone'
-            .($removed === 0 ? '' : ", and $removed removed").'; --force removes '
-            .($refused === 1 ? 'it' : 'them').' regardless'
-        );
-
-        return ExitCode::Failure;
+        // Non-zero for either: a lock this was asked to clear is still there.
+        // Which of the two it was is already on screen above, in the terms a
+        // person acts on — a pid to wait for, or a lock to look at again.
+        return $refused === 0 && $missed === 0 ? ExitCode::Success : ExitCode::Failure;
     }
 }

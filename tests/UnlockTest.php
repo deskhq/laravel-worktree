@@ -148,6 +148,27 @@ it('under --all, leaves the live ones alone and exits non-zero having said which
         ->and($this->lock)->toBeDirectory();
 });
 
+it('exits non-zero when a lock it was asked to clear is still there afterwards', function () {
+    mkdir($this->lock, 0755, true);
+
+    // A lock directory that cannot be moved out of the way stands in for one
+    // that changed under the removal: either way nothing went, and reporting
+    // success for a lock that is still there is what would send somebody back
+    // to `rm -rf`.
+    chmod(dirname($this->lock), 0555);
+
+    $process = worktreeUnlock(['feat/checkout']);
+
+    chmod(dirname($this->lock), 0755);
+
+    expect($process)->toHaveExited(1)
+        ->and($process->getErrorOutput())->toContain($this->lock.' is still there')
+        ->and($this->lock)->toBeDirectory();
+})->skip(
+    fn () => function_exists('posix_geteuid') && posix_geteuid() === 0,
+    'root writes into a read-only directory regardless',
+);
+
 it('says so when no lock is held at all', function () {
     $process = worktreeUnlock(['--all']);
 

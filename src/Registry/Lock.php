@@ -209,7 +209,18 @@ final class Lock
             // Somebody took the lock between the record being read and the
             // directory being moved, so what is aside is their live lock rather
             // than the dead one. Put it back and wait like everyone else.
-            @rename($aside, $this->path);
+            if (! @rename($aside, $this->path)) {
+                // Only reachable if a *third* run created the lock in the
+                // instant between the two renames. Said rather than swallowed:
+                // the run whose lock was moved still believes it holds this
+                // path, which is the one state this file exists to make
+                // impossible, and nothing else on screen would say so.
+                $this->output->error(
+                    "a live lock was moved out of $this->path while a stale one was being broken, and could not be "
+                    .'put back; whatever is working on this worktree is no longer holding the lock it thinks it is — '
+                    ."let it finish, then remove $aside"
+                );
+            }
 
             return false;
         }
