@@ -19,6 +19,9 @@ use DeskHQ\LaravelWorktree\Support\ContainerRefusal;
  * here, in order: we are not inside the container, the run's locks will be
  * released however it ends, the repository has been anchored, and its
  * configuration has been read and understood.
+ *
+ * The usage text is built from the commands registered below, so a command that
+ * exists is a command that is listed — there is no second place to update.
  */
 final class Application
 {
@@ -33,7 +36,7 @@ final class Application
     ) {}
 
     /**
-     * Wire the binary up with the real streams and its four commands.
+     * Wire the binary up with the real streams and its commands.
      */
     public static function create(): self
     {
@@ -47,7 +50,8 @@ final class Application
             ->register(new CreateCommand($output, new Emitter, $runner, $shutdown))
             ->register(new ListCommand($output, new Emitter, $runner))
             ->register(new RemoveCommand($output, $runner, $shutdown))
-            ->register(new ReapCommand($output, $runner, $shutdown, new Confirmation($output)));
+            ->register(new ReapCommand($output, $runner, $shutdown, new Confirmation($output)))
+            ->register(new UnlockCommand($output, $runner, $shutdown));
     }
 
     public function register(Command $command): self

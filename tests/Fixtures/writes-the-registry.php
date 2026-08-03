@@ -27,7 +27,7 @@ $shutdown->listen();
 
 $registry = Registry::fromConfiguration($config);
 $ports = Ports::fromConfiguration($config);
-$locks = new Locks($config->home, $shutdown);
+$locks = new Locks($config->home, $shutdown, $output);
 
 for ($index = 0; $index < $count; $index++) {
     $key = $prefix.'-'.$index;

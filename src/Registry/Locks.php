@@ -2,7 +2,10 @@
 
 namespace DeskHQ\LaravelWorktree\Registry;
 
+use DeskHQ\LaravelWorktree\Console\Output;
 use DeskHQ\LaravelWorktree\Console\ShutdownHandler;
+use DeskHQ\LaravelWorktree\Process\ProcessRunner;
+use DeskHQ\LaravelWorktree\Support\Machine;
 
 /**
  * The two locks, and the promise that they are given back.
@@ -22,7 +25,9 @@ use DeskHQ\LaravelWorktree\Console\ShutdownHandler;
  * Both are released together by the single shutdown handler every run installs,
  * so an interrupted bootstrap leaves nothing behind for the next run to trip
  * over — including a `SIGINT` in the middle of the slow work, which is when it
- * actually happens.
+ * actually happens. What that cannot cover — `SIGKILL`, the OOM killer, a
+ * reboot — is covered instead by the owner record each lock now carries
+ * ({@see Lock}), and by `worktree unlock` for the cases the record cannot settle.
  */
 final class Locks
 {
@@ -36,29 +41,55 @@ final class Locks
      * ~10 minutes. A first bootstrap legitimately takes that long — image
      * pulls, `composer install`, `npm ci` — and the second `create` should wait
      * for it rather than declare it stale.
+     *
+     * The wait is unchanged, and is still the right answer for a holder that is
+     * running. It is no longer paid by a run whose holder has been gone since
+     * Tuesday: that one is judged and broken on the first failed attempt.
      */
     private const int WorktreeAttempts = 6000;
+
+    /** The registry lock's directory, relative to the worktree home. */
+    private const string RegistryLock = 'registry.lock';
+
+    /** Where the per-worktree locks live, relative to the worktree home. */
+    private const string Directory = 'locks';
 
     /** @var array<string, Lock> */
     private array $locks = [];
 
+    private readonly Machine $machine;
+
     public function __construct(
         private readonly string $home,
         private readonly ShutdownHandler $shutdown,
-    ) {}
+        private readonly Output $output,
+    ) {
+        $this->machine = new Machine(new ProcessRunner($output));
+    }
+
+    /**
+     * The machine these locks are judged against, so a command that has to
+     * decide about one of them judges it the same way {@see Lock} does.
+     */
+    public function machine(): Machine
+    {
+        return $this->machine;
+    }
 
     /**
      * The machine-wide lock over slot allocation.
      */
     public function registry(): Lock
     {
-        $path = $this->home.'/registry.lock';
+        $path = $this->home.'/'.self::RegistryLock;
 
-        return $this->remember($path, new Lock(
+        return $this->remember($path, fn (): Lock => new Lock(
             $path,
             self::RegistryAttempts,
             "could not acquire the registry lock at $path within 20s; "
-            .'if no other worktree command is running, remove it and retry'
+            ."if no other worktree command is running, 'worktree unlock --all' removes it",
+            $this->output,
+            $this->machine,
         ));
     }
 
@@ -67,14 +98,41 @@ final class Locks
      */
     public function worktree(string $key): Lock
     {
-        $path = $this->home.'/locks/'.$this->filename($key).'.lock';
+        $path = $this->home.'/'.self::Directory.'/'.$this->filename($key).'.lock';
 
-        return $this->remember($path, new Lock(
+        return $this->remember($path, fn (): Lock => new Lock(
             $path,
             self::WorktreeAttempts,
             "another worktree command has been working on '$key' for over 10m (lock $path); "
-            .'wait for it to finish, or remove the lock if it is stale'
+            ."wait for it to finish, or 'worktree unlock' it if it is stale",
+            $this->output,
+            $this->machine,
         ));
+    }
+
+    /**
+     * Every lock on this machine right now — the registry's, and one per
+     * worktree — whichever checkout took them.
+     *
+     * Machine-wide because the locks are: they hang off `WORKTREE_HOME`, not off
+     * a repository, and a `worktree unlock --all` that quietly skipped another
+     * clone's stale lock would leave the thing it was run to clear.
+     *
+     * @return list<Lock>
+     */
+    public function taken(): array
+    {
+        $locks = [];
+
+        if (is_dir($this->home.'/'.self::RegistryLock)) {
+            $locks[] = $this->registry();
+        }
+
+        foreach (glob($this->home.'/'.self::Directory.'/*.lock', GLOB_ONLYDIR) ?: [] as $path) {
+            $locks[] = $this->worktree(basename($path, '.lock'));
+        }
+
+        return $locks;
     }
 
     /**
@@ -83,10 +141,14 @@ final class Locks
      * Two calls asking for the same lock must hand back the same object, or the
      * second would try to `mkdir` a directory the first already owns and wait
      * out its whole timeout against itself.
+     *
+     * @param  callable(): Lock  $make  Deferred, so a lock this run already has is not rebuilt to be thrown away.
      */
-    private function remember(string $path, Lock $lock): Lock
+    private function remember(string $path, callable $make): Lock
     {
         if (! isset($this->locks[$path])) {
+            $lock = $make();
+
             $this->locks[$path] = $lock;
 
             $this->shutdown->onShutdown(fn () => $lock->release());

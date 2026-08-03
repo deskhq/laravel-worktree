@@ -141,10 +141,11 @@ final readonly class ProcessRunner
      * worktree is named `issue-<n>` and the table is 80 columns wide either way.
      *
      * @param  list<string>  $command
+     * @param  array<string, string>  $env  Added to the environment the call inherits.
      */
-    public function consult(array $command, ?string $cwd = null): ProcessResult
+    public function consult(array $command, ?string $cwd = null, array $env = []): ProcessResult
     {
-        $process = $this->process($command, $cwd);
+        $process = $this->process($command, $cwd, $env);
         $captured = '';
 
         $exitCode = $process->run(function (string $type, string $chunk) use (&$captured): void {
