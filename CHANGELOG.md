@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.1](https://github.com/deskhq/laravel-worktree/compare/v1.0.0...v1.0.1) (2026-08-03)
+
+
+### Code Refactoring
+
+* `Arguments` enforces arity, instead of twelve guards outside it ([#82](https://github.com/deskhq/laravel-worktree/issues/82)) ([2fab328](https://github.com/deskhq/laravel-worktree/commit/2fab3285004d7b5a0cbc5cd721e2662719bc52bb))
+* one module decides which `.env` a directory is read through, instead of three that disagreed ([#83](https://github.com/deskhq/laravel-worktree/issues/83)) ([11fd420](https://github.com/deskhq/laravel-worktree/commit/11fd4208780668182e86fe794af0bef034ecd058))
+* one module for the worktree lifecycle, instead of seven copies of it ([#77](https://github.com/deskhq/laravel-worktree/issues/77)) ([0456cdf](https://github.com/deskhq/laravel-worktree/commit/0456cdfd5f8ce9e9222f86a4716e67ef1556b01c))
+
 ## [1.0.0](https://github.com/deskhq/laravel-worktree/compare/v0.4.0...v1.0.0) (2026-08-03)
 
 
