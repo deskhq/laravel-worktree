@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0](https://github.com/deskhq/laravel-worktree/compare/v1.0.0...v1.0.0) (2026-08-03)
+
+
+### Code Refactoring
+
+* one module for the worktree lifecycle, instead of seven copies of it ([#77](https://github.com/deskhq/laravel-worktree/issues/77)) ([0456cdf](https://github.com/deskhq/laravel-worktree/commit/0456cdfd5f8ce9e9222f86a4716e67ef1556b01c))
+
 ## [1.0.0](https://github.com/deskhq/laravel-worktree/compare/v0.4.0...v1.0.0) (2026-08-03)
 
 
