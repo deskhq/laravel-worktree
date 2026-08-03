@@ -95,6 +95,23 @@ it('removes a lock whose holder is still running when it is told to', function (
         ->and($this->lock)->not->toBeDirectory();
 });
 
+it('reads one holder the same way whichever timezone each run is in', function () {
+    // A start time read out of `ps` is a *rendered* wall-clock date, so an
+    // unpinned locale or timezone hands two runs two different strings for one
+    // process — which reads as a recycled pid, and takes a lock somebody is
+    // inside. Linux answers this out of /proc in ticks and never notices;
+    // macOS, where most of this package's runs happen, is where it bites.
+    $holder = startsHolding('wt-desk-feat-checkout', 'Europe/Paris');
+
+    $process = worktree(['unlock', 'feat/checkout'], env: ['TZ' => 'Asia/Tokyo', 'LC_ALL' => 'en_US.UTF-8']);
+
+    expect($process)->toHaveExited(1)
+        ->and($process->getErrorOutput())
+        ->toContain('pid '.$holder->getPid())
+        ->toContain('and that process is still running')
+        ->and($this->lock)->toBeDirectory();
+});
+
 it('refuses a lock another machine took, which is what a shared home looks like', function () {
     lockTakenBy($this->lock, ownerRecord(['pid' => deadPid(), 'host' => 'somebody-elses-laptop.local']));
 
@@ -209,7 +226,7 @@ function worktreeUnlock(array $arguments): Process
  * A second process holding $key's lock for real — a running pid, its own owner
  * record, and no intention of giving it back until the gate says so.
  */
-function startsHolding(string $key): Process
+function startsHolding(string $key, ?string $timezone = null): Process
 {
     $process = new Process([
         PHP_BINARY,
@@ -217,7 +234,7 @@ function startsHolding(string $key): Process
         test()->home,
         $key,
         test()->gate,
-    ]);
+    ], null, $timezone === null ? null : ['TZ' => $timezone, 'LC_ALL' => 'C']);
 
     $process->setTimeout(60);
     $process->start();

@@ -70,20 +70,22 @@ final readonly class Owner
 
     /**
      * The record for the run asking, or null on a machine that will not name its
-     * own pid — in which case the lock goes unrecorded and the next run waits it
-     * out, which is what this package did before there were records at all.
+     * own pid or itself — in which case the lock goes unrecorded and the next
+     * run waits it out, which is what this package did before there were records
+     * at all.
      */
     public static function thisRun(Machine $machine): ?self
     {
         $pid = $machine->pid();
+        $host = $machine->host();
 
-        if ($pid === null) {
+        if ($pid === null || $host === null) {
             return null;
         }
 
         return new self(
             $pid,
-            $machine->host(),
+            $host,
             $machine->boot(),
             $machine->startedAt($pid),
             self::invocation(),
@@ -177,8 +179,10 @@ final readonly class Owner
     public function liveness(Machine $machine): Liveness
     {
         // Another machine's pid, which this one's process table says nothing
-        // about — a `WORKTREE_HOME` on a network share is the case.
-        if ($this->host !== $machine->host()) {
+        // about — a `WORKTREE_HOME` on a network share is the case. A machine
+        // that cannot name itself cannot claim the record either, for the same
+        // reason: it has no way to know the pid was issued here.
+        if ($machine->host() === null || $this->host !== $machine->host()) {
             return Liveness::Unknown;
         }
 

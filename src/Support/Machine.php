@@ -59,15 +59,20 @@ final class Machine
     public function __construct(private readonly ProcessRunner $runner) {}
 
     /**
-     * What this machine is called.
+     * What this machine is called, or null when it will not say.
      *
      * It is in the owner record so that a `WORKTREE_HOME` on a network share
      * cannot have one machine judging another's pid table — a pid is only ever
      * meaningful on the host that issued it.
+     *
+     * Null rather than a stand-in like `unknown`, because a stand-in is the one
+     * answer that would defeat the check it exists for: two machines that both
+     * failed to name themselves would agree on it, and each would read the
+     * other's pids as its own.
      */
-    public function host(): string
+    public function host(): ?string
     {
-        return $this->host ??= (gethostname() ?: 'unknown');
+        return $this->host ??= (gethostname() ?: null);
     }
 
     /**
@@ -174,10 +179,19 @@ final class Machine
      * this is an ordinary answer rather than a failure — it makes the liveness
      * check more conservative, and `ps: illegal option` on the diagnostics would
      * read as something having gone wrong with the run.
+     *
+     * `lstart` is a *rendered* wall-clock date rather than a number, so the
+     * locale and the timezone are pinned: a holder started in a terminal with
+     * `TZ=Europe/Paris` and read by a run with `TZ=UTC` would otherwise get two
+     * different strings for one process, which reads as a recycled pid — and
+     * that is the direction that breaks a live lock.
      */
     private function fromPs(int $pid): ?string
     {
-        $result = $this->runner->consult(['ps', '-o', 'lstart=', '-p', (string) $pid]);
+        $result = $this->runner->consult(
+            ['ps', '-o', 'lstart=', '-p', (string) $pid],
+            env: ['LC_ALL' => 'C', 'TZ' => 'UTC'],
+        );
 
         if (! $result->succeeded()) {
             return null;
