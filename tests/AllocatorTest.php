@@ -135,6 +135,28 @@ it('points at the sweep when the slots are held by entries with nothing behind t
     deleteDirectory($elsewhere);
 });
 
+/**
+ * The count is machine-wide, because slots are. So a message that counts three
+ * and then names a run that would reclaim two sends somebody back to an
+ * exhausted registry having done exactly what they were told: `--all` unless
+ * *every* one of them is this checkout's to reclaim.
+ */
+it('names the machine-wide sweep when only some of the dead slots are this checkout\'s', function () {
+    $home = temporaryDirectory('worktree-home');
+    $elsewhere = temporaryDirectory('worktree-checkout');
+    $allocator = allocatorIn($home, $this->base, $this->diagnostics, slots: 2);
+
+    claim($allocator, 'wt-desk-441');
+    claim($allocator, 'wt-shop-512', repo: $elsewhere);
+
+    expect(fn () => claim($allocator, 'wt-desk-604'))
+        ->toThrow(WorktreeException::class, 'all 2 worktree slots are in use, and 2 of them are held by registry entries '
+            ."whose worktree directory is gone; 'worktree reap --all' reclaims them");
+
+    deleteDirectory($elsewhere);
+    deleteDirectory($home);
+});
+
 it('refuses when every free slot has a port the machine is already using', function () {
     $allocator = allocatorIn($this->home, $this->base, $this->diagnostics, slots: 2);
 

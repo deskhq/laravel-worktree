@@ -296,6 +296,41 @@ it('skips an entry whose worktree came back between the scan and the reclaim', f
 });
 
 /**
+ * The other half of that re-check: the registry, re-read under the lock. A
+ * `remove` that ran while this one was working has already given the slot back,
+ * and there is nothing left here to reclaim — which is a line rather than a
+ * teardown, since the project it names is somebody else's business by then.
+ */
+it('skips an entry that something released between the scan and the reclaim', function () {
+    daemonHolds([
+        'wt-desk-441-fix-login' => ['volumes' => ['441-pgsql']],
+        'wt-desk-feat-search' => ['volumes' => ['search-pgsql']],
+    ]);
+
+    registryHolds([
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
+        'wt-desk-feat-search' => slotEntry(3, 'feat-search'),
+    ], gone: ['wt-desk-441-fix-login', 'wt-desk-feat-search']);
+
+    // The registry as something else leaves it mid-run: the first entry still
+    // there, the second one released. Written the moment the first entry's
+    // Compose teardown is asked for, which is after the scan.
+    claimedDuringTheRun('wt-desk-441-fix-login', slotEntry(0, '441-fix-login'));
+
+    $process = worktreeReap(['--yes']);
+
+    expect($process)->toHaveSucceeded()
+        ->and($process->getErrorOutput())
+        ->toContain('skipping wt-desk-feat-search: nothing in the registry holds it any more')
+        ->toContain('its slot is already free')
+        ->toContain('reclaimed 1 registry entry: wt-desk-441-fix-login (slot 0)')
+        // Not touched, not torn down: an entry nothing holds is not this run's
+        // to act on, and its project is an orphan for the next scan to find.
+        ->and(dockerCalls())->not->toContain('compose -p wt-desk-feat-search down --volumes --remove-orphans')
+        ->and(registryNow())->toBe([]);
+});
+
+/**
  * A slot given back over volumes that are still there would leave nothing
  * naming them — the-desk#1095 from the other end. So the entry stands, and the
  * next `reap` finds it again.

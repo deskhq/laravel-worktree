@@ -176,8 +176,12 @@ final readonly class Allocator
      * the honest reading of it is "raise `slots`", which grows the leak instead
      * of fixing it (#53). So the entries with nothing behind them are counted
      * here — the registry has just been read for the search above — and the
-     * sweep that reclaims them is named, with `--all` when they belong to
-     * checkouts other than this one and a scoped `reap` would find none of them.
+     * sweep that reclaims them is named.
+     *
+     * `--all` unless *every* one of them is reclaimable from this checkout: the
+     * count is machine-wide, because slots are, and a message that counts three
+     * and then names a run that would reclaim two sends somebody back to an
+     * exhausted registry having done what it said.
      */
     private function exhausted(string $repo): string
     {
@@ -193,7 +197,7 @@ final readonly class Allocator
         return "all $this->slots worktree slots are in use, and ".count($dead).' of them '
             .($one ? 'is held by a registry entry whose' : 'are held by registry entries whose')
             .' worktree directory is gone; '
-            ."'worktree reap".($here === [] ? ' --all' : '')."' reclaims ".($one ? 'it' : 'them')
+            ."'worktree reap".(count($here) === count($dead) ? '' : ' --all')."' reclaims ".($one ? 'it' : 'them')
             .", or free one with 'worktree remove <slug>'";
     }
 
