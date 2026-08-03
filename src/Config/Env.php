@@ -17,7 +17,8 @@ use Dotenv\Repository\RepositoryInterface;
  * `laravel/framework` and is therefore already in the main checkout's vendor,
  * so the `.env` is loaded exactly the way `LoadEnvironmentVariables` loads it:
  * the same repository (immutable, with the putenv adapter), the same
- * `.env.<APP_ENV>` preference, the same tolerance of a missing file.
+ * `.env.<APP_ENV>` preference ({@see Preference}), the same tolerance of a
+ * missing file.
  *
  * The casting below is Laravel's `Illuminate\Support\Env` reproduced value for
  * value, and a test asserts that against the real thing. Anything less and
@@ -70,7 +71,10 @@ final class Env
             return;
         }
 
-        Dotenv::create(self::repository(), $root, self::fileIn($root))->safeLoad();
+        // The file `bin/sail` and `LoadEnvironmentVariables` would read here,
+        // decided where they all decide it — and with no `.env.example` among
+        // the candidates, because Laravel reads none ({@see Preference::nameIn()}).
+        Dotenv::create(self::repository(), $root, Preference::of(self::exportedEnvironment())->nameIn($root))->safeLoad();
     }
 
     /**
@@ -106,22 +110,6 @@ final class Env
         }
 
         return self::$exported;
-    }
-
-    /**
-     * `bin/sail` and `LoadEnvironmentVariables` agree on this: when `APP_ENV`
-     * is set in the real environment and the matching file exists, it is read
-     * *instead of* `.env`, not on top of it.
-     */
-    private static function fileIn(string $root): string
-    {
-        $environment = self::exportedEnvironment();
-
-        if ($environment !== null && is_file($root.'/.env.'.$environment)) {
-            return '.env.'.$environment;
-        }
-
-        return '.env';
     }
 
     /**

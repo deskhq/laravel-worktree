@@ -36,9 +36,6 @@ use DeskHQ\LaravelWorktree\Naming\Identity;
  */
 final readonly class EnvFile
 {
-    /** What a worktree falls back to when the main checkout has no `.env`. */
-    public const string Example = '.env.example';
-
     public function __construct(
         private Output $output,
         /** The main working tree, whose `.env` a new worktree starts from. */
@@ -101,6 +98,11 @@ final readonly class EnvFile
     /**
      * The file both `bin/sail` and Laravel will read in this worktree.
      *
+     * The name of the file being *written*, which is why it asks
+     * {@see $appEnv} directly rather than {@see Preference}: that one answers
+     * which of the files a directory *has* it is read through, and this one
+     * exists precisely because the file does not exist yet.
+     *
      * ```bash
      * if [ -n "$APP_ENV" ] && [ -f ./.env."$APP_ENV" ]; then
      *   source ./.env."$APP_ENV";
@@ -122,31 +124,32 @@ final readonly class EnvFile
     }
 
     /**
-     * What the generated file starts out as: the main checkout's own
-     * environment, or the worktree's `.env.example` with a line saying so.
+     * What the generated file starts out as: the environment the main checkout
+     * is itself read through, or the worktree's `.env.example` with a line
+     * saying so.
+     *
+     * The example searched is the *worktree's*, because the one shipped with
+     * the code being checked out is the one describing it; the checkout the
+     * `.env` is copied from may be on another branch entirely.
      *
      * @throws WorktreeException when neither exists.
      */
     private function starting(Identity $identity, string $name): Assignments
     {
-        foreach ([$this->mainRoot.'/'.$name, $this->mainRoot.'/.env'] as $candidate) {
-            if (is_file($candidate)) {
-                return Assignments::read($candidate);
-            }
+        $path = Preference::of($this->appEnv)->pathIn($this->mainRoot, exampleIn: $identity->path);
+
+        if ($path === null) {
+            throw new WorktreeException(
+                "nothing to generate $name from: the checkout at $this->mainRoot has no $name, "
+                .'and the worktree has no '.Preference::Example
+            );
         }
 
-        $example = $identity->path.'/'.self::Example;
-
-        if (is_file($example)) {
-            $this->output->line("the checkout at $this->mainRoot has no $name to copy; starting from the worktree's ".self::Example);
-
-            return Assignments::read($example);
+        if (Preference::isExample($path)) {
+            $this->output->line("the checkout at $this->mainRoot has no $name to copy; starting from the worktree's ".Preference::Example);
         }
 
-        throw new WorktreeException(
-            "nothing to generate $name from: the checkout at $this->mainRoot has no $name, "
-            .'and the worktree has no '.self::Example
-        );
+        return Assignments::read($path);
     }
 
     /**

@@ -66,6 +66,27 @@ something here says *key*, it means all of those at once.
 **Marker** — the literal `wt-` prefix on every key. Not configurable, because it
 is the whole of what scopes `reap`.
 
+## Which `.env` is read
+
+**Preference** — the rule `bin/sail` and Laravel's `LoadEnvironmentVariables`
+share: `.env.<APP_ENV>` when the *shell* exported one and that file is there,
+otherwise `.env`. Written once, in `src/Config/Preference.php`, and asked by all
+three things that need it — the `env()` `config/worktree.php` is read through,
+the file a new worktree's environment starts from, and what a checkout calls its
+app service before it has a worktree (#76).
+
+**Exported environment** — `APP_ENV` as this process inherited it, captured
+before any file is read over it. A `.env` that sets `APP_ENV=local` has said
+nothing about which file it is itself read through, and treating it as though it
+had was #38.
+
+**Example** — `.env.example`: the last candidate, and the only one that is a
+fallback rather than a reading, since a repository that ships nothing else still
+says in it what it calls its app service. *Which* directory's example counts is
+the caller's to name — the worktree's when generating that worktree's
+environment, the checkout's when there is no worktree yet — and `env()` names
+none, because Laravel reads none.
+
 ## What the machine records
 
 **Registry** — `~/.laravel-worktree/registry.json`, one object per worktree,
