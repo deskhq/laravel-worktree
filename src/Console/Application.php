@@ -48,6 +48,7 @@ final class Application
 
         return $application
             ->register(new CreateCommand($output, new Emitter, $runner, $shutdown))
+            ->register(new PathCommand($output, new Emitter, $runner))
             ->register(new ListCommand($output, new Emitter, $runner))
             ->register(new RemoveCommand($output, $runner, $shutdown))
             ->register(new ReapCommand($output, $runner, $shutdown, new Confirmation($output)))
