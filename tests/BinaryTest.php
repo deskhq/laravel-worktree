@@ -45,7 +45,9 @@ it('lists every command it dispatches, with what each one takes', function () {
         ->toContain('stop <slug> | --all | --all-except <slug> [--all-repos]')
         ->toContain('start <slug>')
         ->toContain('remove <slug>')
-        ->toContain('reap [--all] [--dry-run] [--yes]');
+        ->toContain('reap [--all] [--dry-run] [--yes]')
+        ->toContain('unlock <slug> [--all] [--force]')
+        ->toContain('doctor [--json]');
 });
 
 it('refuses to run inside the container and creates nothing', function () {
