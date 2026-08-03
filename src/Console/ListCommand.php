@@ -306,8 +306,14 @@ final readonly class ListCommand implements Command
     }
 
     /**
-     * Whether every key already ends with the branch it is checked out on, which
+     * Whether every key already carries the branch it is checked out on, which
      * is what makes a `BRANCH` column a second copy of one.
+     *
+     * The slug rather than the key, though the key is the slug with a prefix:
+     * `wt-desk-441-fix-login` *ends with* `-fix-login`, which is the branch a
+     * pull request's worktree is on, and a reader cannot see where the slug
+     * stopped and the branch began. Comparing the two names the entry holds says
+     * what the column would actually be repeating.
      *
      * All of them or none: a column is per table, and blanking the redundant
      * cells of one would cost the reader more than the width it saved.
@@ -317,7 +323,7 @@ final readonly class ListCommand implements Command
     private static function impliesItsBranches(array $entries): bool
     {
         foreach ($entries as $entry) {
-            if (! str_ends_with($entry->key, '-'.$entry->branch)) {
+            if ($entry->slug !== $entry->branch) {
                 return false;
             }
         }

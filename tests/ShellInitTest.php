@@ -108,7 +108,7 @@ it('names every command the binary dispatches, and the flags each one takes', fu
     }
 
     expect($script)
-        ->toContain("create) printf '%s\\n' --refresh --json")
+        ->toContain("create) printf '%s\\n' --pr --refresh --json")
         ->toContain("stop) printf '%s\\n' --all --all-except --all-repos")
         ->toContain("reap) printf '%s\\n' --all --dry-run --yes")
         // The commands whose argument is a worktree, which is the completion

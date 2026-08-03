@@ -17,11 +17,17 @@ use DeskHQ\LaravelWorktree\Registry\Registry;
  * ```
  * worktree create 441             -> gh issue view 441 --json title -> 441-fix-login
  * worktree create feat/checkout   -> no lookup                      -> feat-checkout
+ * worktree create --pr 441        -> gh pr view 441                 -> 441-fix-login
  * ```
  *
- * A numeric argument is the only thing that triggers the `gh` lookup; anything
+ * A numeric argument is the only thing that triggers the issue lookup; anything
  * else is used verbatim. One code path either way, and `gh` is never required
  * ({@see Issues}).
+ *
+ * `--pr` is the exception, and the only one: the three names above are what a
+ * pull request's worktree gets too — so it is found by number like any other —
+ * but the branch it is checked out on is the pull request's own head, which
+ * nothing here can derive and only `gh` can say ({@see PullRequests}).
  *
  * ## The `wt-` marker is not configurable
  *
@@ -58,6 +64,7 @@ final readonly class Identities
         private Anchor $anchor,
         private Registry $registry,
         private Issues $issues,
+        private PullRequests $pullRequests,
         /** `repo_slug` as configured; null means the main checkout's directory name. */
         private ?string $configuredSlug,
     ) {}
@@ -72,6 +79,7 @@ final readonly class Identities
             $anchor,
             Registry::fromConfiguration($config),
             new Issues($runner, $output, $anchor),
+            new PullRequests($runner, $output, $anchor),
             $config->repoSlug,
         );
     }
@@ -127,6 +135,53 @@ final readonly class Identities
         $this->refuseCollision($identity);
 
         return $identity;
+    }
+
+    /**
+     * Every name pull request $number implies.
+     *
+     * The names are the ones a numeric argument gets — `441-fix-login`, and the
+     * key, path and project that follow from it — so a worktree made for a pull
+     * request is found by `path 441`, removed by `remove 441` and completed like
+     * any other. What differs is the **branch**: the pull request was opened
+     * from one that already exists, and that ref is the point of the whole
+     * flag, so it is asked for rather than derived ({@see PullRequests}).
+     *
+     * Except on the way back in. A worktree this checkout already has under
+     * this key is on whatever branch the checkout actually landed on — which,
+     * for a pull request from a fork, is a name gh chose and this run cannot
+     * reproduce — so the entry's own record wins. That is also why the
+     * collision refusal {@see identify()} makes has no counterpart here: a
+     * number names one pull request, and the branch disagreeing with the name
+     * is the ordinary case rather than the suspicious one.
+     *
+     * @throws WorktreeException when $number is not a number, when `gh` cannot say what the pull request's head is, or when the name derives a project name Docker would reject.
+     */
+    public function identifyPullRequest(string $number): Identity
+    {
+        $number = trim($number);
+
+        if (preg_match('/\A\d+\z/', $number) !== 1) {
+            throw new WorktreeException("'--pr' takes a pull request number, and '$number' is not one");
+        }
+
+        $pull = $this->pullRequests->view($number);
+        $key = self::Marker.$this->repoSlug().'-'.$pull->slug;
+
+        if (! Slug::isProjectName($key)) {
+            throw new WorktreeException(
+                "pull request $number derives the project name '$key', which Docker will not accept "
+                .'(it must match [a-z0-9][a-z0-9_-]*)'
+            );
+        }
+
+        return new Identity(
+            $number,
+            $pull->slug,
+            $key,
+            $this->registeredBranch($key) ?? $pull->headRef,
+            dirname($this->anchor->mainRoot).'/'.$this->repoSlug().self::Directory.'/'.$pull->slug,
+        );
     }
 
     /**
@@ -239,6 +294,17 @@ final readonly class Identities
         }
 
         return $slug;
+    }
+
+    /**
+     * The branch the worktree registered under $key is on, when this checkout
+     * has one at all.
+     */
+    private function registeredBranch(string $key): ?string
+    {
+        $entry = $this->registry->entry($key);
+
+        return $entry !== null && $entry->belongsTo($this->anchor->mainRoot) ? $entry->branch : null;
     }
 
     /**

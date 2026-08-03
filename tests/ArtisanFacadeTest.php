@@ -89,6 +89,7 @@ it('forwards the flags the host binary understands', function (string $command, 
         ->assertExitCode(1);
 })->with([
     ['worktree:create', ['arguments' => ['441'], '--refresh' => true, '--json' => true], 'create 441 --refresh --json'],
+    ['worktree:create', ['arguments' => ['441'], '--pr' => true], 'create 441 --pr'],
     ['worktree:path', ['arguments' => ['441'], '--json' => true], 'path 441 --json'],
     ['worktree:list', ['--all' => true, '--json' => true], 'list --all --json'],
     ['worktree:stop', ['arguments' => ['441'], '--all-except' => true, '--all-repos' => true], 'stop 441 --all-except --all-repos'],

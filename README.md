@@ -43,7 +43,7 @@ Laravel is never booted by the binary. Nothing in it depends on an application t
 | `docker` | Compose **v2.24 or newer** — the overlay uses the `!override` merge tag, and an older Compose merges `depends_on` instead of replacing it, silently starting everything. Checked before anything is generated. |
 | PHP on the host | the binary is PHP, and it runs outside the container. `ext-pcntl` is required, for the signal handling that releases locks on an interrupted run. |
 | `laravel/sail` | a soft dependency: detected, never required, and deliberately not in this package's `require`. |
-| `gh` | **optional.** It enriches a numeric slug with the issue title. Absent, logged out, offline, or pointed at a repository with no such issue are all the same ordinary answer. |
+| `gh` | **optional**, with one exception. It enriches a numeric slug with the issue title, and absent, logged out, offline, or pointed at a repository with no such issue are all the same ordinary answer. [`create --pr`](#reviewing-a-pull-request) is the exception and cannot work without it: only the forge knows which branch a pull request was opened from. |
 
 No `jq`. The bash original this replaces needed it; nothing here does.
 
@@ -92,6 +92,7 @@ The `chmod` is not optional: `vendor:publish` copies with the umask's permission
 
 ```bash
 cd "$(./vendor/bin/worktree create 441)"   # enter a worktree, making it if it is not there
+cd "$(./vendor/bin/worktree create --pr 441)"   # the same, for somebody's pull request
 ./vendor/bin/worktree path 441             # ask where one is, and change nothing
 ./vendor/bin/worktree list
 ./vendor/bin/worktree stop --all-except 441  # give the machine its memory back
@@ -115,7 +116,7 @@ Exit codes: `0` success, `1` operational failure, `64` usage error. An interrupt
 ## Creating, resuming and re-entering
 
 ```bash
-worktree create <slug> [base] [--refresh] [--json]
+worktree create <slug> [base] [--pr] [--refresh] [--json]
 ```
 
 `create` prints the worktree's **absolute path**, alone, on stdout — that is the whole of what a caller has to parse:
@@ -159,6 +160,26 @@ A registry entry whose directory somebody has deleted by hand is none of the thr
 The per-worktree lock is taken before anything is read and held until the process exits, so a stray second `create 441` waits and then re-enters rather than racing the first through git, Composer, Sail and npm in one directory. The registry lock covers the free-slot search and the claim that follows it and nothing else — held across a five-minute bootstrap, it would serialise every unrelated worktree on the machine.
 
 Each lock records who took it, so a run whose holder is provably gone does not pay that wait at all. See [Locks, and the ones nobody holds](#locks-and-the-ones-nobody-holds).
+
+## Reviewing a pull request
+
+```bash
+cd "$(./vendor/bin/worktree create --pr 441)"
+```
+
+Every other `create` cuts a new branch from a base. That is right for the workflow this package was extracted from — an agent picks issue 441 up and works on it — and it is the wrong shape for the other thing worktrees are for just as often: check somebody's pull request out, run it, and look at it. Doing that by hand means creating a worktree for a branch that already exists and then fixing up the checkout, at which point the branch and the slug disagree and the tool's own model of the worktree is wrong.
+
+`--pr` names the worktree from the number and the pull request's title — exactly as a numeric slug is named, so `path 441`, `remove 441`, `list` and the completion all find it afterwards without being told which kind of thing 441 was — and attaches its **head branch**, tracking it rather than forking from it. The slot, the ports, the overlay, the `.env`, the bootstrap, the three entry states and the re-entry are all unchanged. There is no base to give it, and passing one is a usage error rather than a fork from something.
+
+| | |
+| --- | --- |
+| **`gh` is required here** | And nowhere else. Only the forge knows which branch a pull request was opened from, so there is no `issue-441` to fall back to: the flag fails, naming what it needed. No other command's `gh` behaviour changes. |
+| **Forks** | A head in somebody's fork is not a ref this clone can name, so the checkout is `gh pr checkout` run inside the attached worktree. gh renames a head that would collide with the default branch — a fork's `main` arrives as `<owner>/main` — so the branch is read back off the worktree afterwards, and **that** is what the registry records. |
+| **Closed or merged** | Not an error. Running the thing that was merged is most of what looking at it afterwards is for, so the state is never asked about. |
+| **A head already checked out** | git will not put one branch in two working trees. It refuses partway through a fetch, about a directory nobody named; this refuses first, and says which worktree is holding the branch. |
+| **Re-entry** | Fetches nothing, deliberately. The branch is somebody else's and it moves, and quietly fast-forwarding — or resetting — a worktree with local commits in it would be far worse than leaving it stale. `worktree create --pr 441` on an existing entry re-enters it exactly as any other re-entry does. |
+
+`wt --create --pr 441` works too, and `cd`s you into it.
 
 ## Finding one
 
@@ -255,7 +276,7 @@ wt-the-desk-feat-search    1     20010  20011  20012   20013  20014  feat-search
 
 Three things are elided, all of them things the line already says somewhere else:
 
-- **`BRANCH`**, when every key ends with its branch — which it does, since a key is `wt-` plus the repository plus the slug. On a branch an agent named from an issue title, the two together are a hundred columns of one piece of information. A branch that slugified differently, `feat/checkout` against `feat-checkout`, keeps its column.
+- **`BRANCH`**, when every worktree's branch is its slug — which it is, on a branch an agent named from an issue title, where the two together are a hundred columns of one piece of information. A branch that slugified differently, `feat/checkout` against `feat-checkout`, keeps its column; so does the head branch of a [pull request's worktree](#reviewing-a-pull-request), which the slug `441-fix-login` does not imply.
 - **the leading directories of `PATH`**, which every worktree of a repository shares. The root is named once above the table instead.
 - **whatever still does not fit**, truncated with a `…` rather than wrapped — a continuation line sitting under no header is worse than an elided field, and `--json` is there for the reader who wants everything.
 
@@ -584,7 +605,7 @@ fail  ports    config/worktree.php: 1 published host port would be the same in e
 
                Every published port of every service a worktree starts needs an entry — including the services it starts through depends_on rather than by name.
 ok    docker   the Docker daemon is answering ('docker info')
-warn  gh       gh is not on this PATH, so 'worktree create 441' names the worktree issue-441 rather than 441-fix-login; nothing else in this package needs it
+warn  gh       gh is not on this PATH, so 'worktree create 441' names the worktree issue-441 rather than 441-fix-login; the only thing here that cannot work without it is 'worktree create --pr'
 ok    slots    3 of 50 slots are claimed on this machine, so 47 are free
 ok    block    slot 3 is the next one a create would take, and its ports (20030-20034) are free
 ok    locks    no lock is held on this machine
@@ -606,7 +627,7 @@ a 'worktree create' would stop on the failure above; nothing was created, starte
 | `sail` | there is a `laravel/sail` for the worktree to be driven through |
 | `ports` | [every published host port](#the-published-port-pre-flight) a worktree's services bind is offset per worktree |
 | `docker` | there is a daemon to boot anything on |
-| `gh` | issue titles are available, which is what names a numeric slug |
+| `gh` | issue titles are available, which is what names a numeric slug — and `create --pr` has something to ask |
 | `slots` | how much of the slot range this machine has claimed |
 | `block` | the next slot a create would take has a free block of host ports |
 | `locks` | every [lock](#locks-and-the-ones-nobody-holds) on this machine has a holder that is still running |
@@ -732,19 +753,22 @@ One argument in, every name a run needs out. A numeric argument is enriched with
 ```bash
 worktree create 441             # gh issue view 441 --json title  ->  441-fix-login
 worktree create feat/checkout   # no lookup                       ->  feat-checkout
+worktree create --pr 441        # gh pr view 441                  ->  441-fix-login
 ```
 
 | Thing | Form | Example |
 | --- | --- | --- |
 | Registry key, and Compose project | `wt-<repo-slug>-<slug>` | `wt-the-desk-441-fix-login` |
 | Worktree path | `<parent of the main checkout>/<repo-slug>-worktrees/<slug>` | `../the-desk-worktrees/441-fix-login` |
-| Branch | numeric: the slug; named: the argument verbatim | `441-fix-login`, `feat/checkout` |
+| Branch | numeric: the slug; named: the argument verbatim; `--pr`: the pull request's head | `441-fix-login`, `feat/checkout`, `fix-login` |
 
 The branch deliberately differs from the slug for a named worktree: somebody typing `feat/checkout` means that branch, and slashes are legal in refs but not in directory names or Compose project names. `repo_slug` defaults to the main checkout's directory name, slugified.
 
 A slug is lowercased, every run of non-alphanumerics collapsed to a single dash, no dash at either end, and cut to 50 characters — then stripped again, because the cut can land on a dash. What comes out is checked against Compose's own rule (`[a-z0-9][a-z0-9_-]*`) where it is built, rather than left for Docker to reject minutes into a bootstrap.
 
 `gh` is an enrichment, never a dependency. Absent, logged out, offline, or pointed at a repository that has no issue 441 are all the same ordinary answer, and all of them name the worktree `issue-441`. What `gh` says about itself stays off the diagnostics, because an optional tool declining is not a failure of the run.
+
+[`create --pr`](#reviewing-a-pull-request) is the one exception in the package, and it is deliberate rather than an oversight: a pull request's head branch is a fact only the forge holds, so there is nothing to fall back to. That flag alone fails, saying which tool it needed; no other command's `gh` behaviour changes.
 
 Two different arguments can slugify onto one name — `feat/checkout` and `feat-checkout` — and the second is refused rather than silently re-entering the first:
 
