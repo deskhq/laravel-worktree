@@ -8,6 +8,29 @@ explanations are written in, so that a name in a class, a message on stderr and
 a sentence in an issue are all talking about the same object. If you are adding
 a concept, it belongs here before it belongs in a class name.
 
+## What a command is called with
+
+**Invocation** — one run's arguments, parsed: the positionals in order, and the
+flags that were given. `src/Console/Arguments.php`. Long flags only, only the
+ones the command declares, and every command's is `<command> <name> [base]
+[--flags]`.
+
+**Arity** — how many positionals a command takes, whether it can run without
+the first one, and what it calls them. Declared in the same call as the accepted
+flags, because `create 441 main extra` and `create 441 --refesh` are the same
+kind of mistake: the command called wrong, refused before anything is read
+(#75). `src/Console/Arity.php` writes those refusals, so nine commands that used
+to phrase the same one apiece now phrase it once.
+
+What it deliberately does not own is a missing name whose refusal depends on a
+*flag* — `stop --all` and `unlock --all` name nothing on purpose, and `create`'s
+sentence changes with `--pr`. Those commands declare only their count, and keep
+that refusal.
+
+**Usage error** — called wrong rather than failed. Exit 64, one line of usage,
+and nothing touched: `src/Exceptions/UsageException.php`, answered in
+`Application::run()`.
+
 ## The repository
 
 **Checkout** — a clone of the application on this machine. There can be more

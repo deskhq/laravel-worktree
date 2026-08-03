@@ -121,7 +121,12 @@ final readonly class StopCommand implements Command
 
     public function run(array $arguments, Anchor $anchor, Configuration $config): int
     {
-        $invocation = Arguments::parse($arguments, [self::All, self::AllExcept, self::AllRepos]);
+        $invocation = Arguments::parse(
+            $arguments,
+            [self::All, self::AllExcept, self::AllRepos],
+            takes: Arity::optional($this->name()),
+        );
+
         $name = $invocation->at(0);
         $named = $name !== null && trim($name) !== '';
 
@@ -161,10 +166,6 @@ final readonly class StopCommand implements Command
                 '--all and --all-except are two different runs; --all stops every worktree, '
                 .'--all-except stops every worktree but the one you name'
             );
-        }
-
-        if ($invocation->at(1) !== null) {
-            throw new UsageException('stop takes one name; given '.implode(' ', $invocation->positional));
         }
 
         if ($invocation->has(self::All) && $named) {

@@ -87,14 +87,8 @@ final readonly class ShellInitCommand implements Rootless
 
     public function emit(array $arguments): int
     {
-        $invocation = Arguments::parse($arguments);
+        $invocation = Arguments::parse($arguments, [], takes: Arity::optional($this->name(), 'shell'));
         $named = $invocation->at(0);
-
-        if ($invocation->at(1) !== null) {
-            throw new UsageException(
-                'shell-init takes one shell; given '.implode(' ', $invocation->positional)
-            );
-        }
 
         $dialect = $named !== null ? Dialect::named($named) : Dialect::current();
 

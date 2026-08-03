@@ -12,6 +12,13 @@ use DeskHQ\LaravelWorktree\Exceptions\UsageException;
  * silently re-entered a ready worktree without refreshing it would be a run
  * that did the opposite of what was asked, with nothing on screen to say so.
  *
+ * The positionals are held to the command's declared {@see Arity} for the same
+ * reason and in the same call: `path 441 main` is as much a mistyped run as
+ * `path 441 --jsn`, and both are answered before the registry has been read.
+ * Declaring one is not optional, for the reason the flag whitelist is not:
+ * a command that could forget to say what it takes would accept anything, and
+ * silently ignoring the argument somebody typed is the failure this refuses.
+ *
  * Deliberately not a general option parser: there are no short flags, no
  * values, and no `--flag=value`, because nothing this package exposes needs
  * them. Every command here is `<command> <name> [base] [--flags]`.
@@ -30,10 +37,12 @@ final readonly class Arguments
     /**
      * @param  list<string>  $arguments  The raw argv, with the command name already taken off.
      * @param  list<string>  $accepted  The flags this command understands, without their dashes.
+     * @param  Arity  $takes  How many positionals it takes, and what it calls them.
      *
-     * @throws UsageException on a flag the command does not accept.
+     * @throws UsageException on a flag the command does not accept, or on
+     *                        positionals its arity does not allow.
      */
-    public static function parse(array $arguments, array $accepted = []): self
+    public static function parse(array $arguments, array $accepted, Arity $takes): self
     {
         $positional = [];
         $flags = [];
@@ -56,6 +65,11 @@ final readonly class Arguments
 
             $flags[] = $flag;
         }
+
+        // After the flags, so that `path 441 main --jsn` is answered by the
+        // typo rather than by the count: the option is the part that would
+        // have changed what the run did.
+        $takes->verify($positional);
 
         return new self($positional, $flags);
     }

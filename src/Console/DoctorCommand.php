@@ -6,7 +6,6 @@ use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Doctor\Examination;
 use DeskHQ\LaravelWorktree\Doctor\Report;
 use DeskHQ\LaravelWorktree\Doctor\Verdict;
-use DeskHQ\LaravelWorktree\Exceptions\UsageException;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
@@ -97,13 +96,7 @@ final readonly class DoctorCommand implements Diagnostic
 
     private function examine(array $arguments, Anchor $anchor, ?Configuration $config, ?string $unreadable): int
     {
-        $invocation = Arguments::parse($arguments, [self::Json]);
-
-        if ($invocation->at(0) !== null) {
-            throw new UsageException(
-                'doctor takes no arguments, only options; given '.implode(' ', $invocation->positional)
-            );
-        }
+        $invocation = Arguments::parse($arguments, [self::Json], takes: Arity::options($this->name()));
 
         $report = (new Examination($anchor, $config, $unreadable, $this->runner, $this->output, $this->shutdown))->report();
 

@@ -131,24 +131,24 @@ final readonly class CreateCommand implements Command
 
     public function run(array $arguments, Anchor $anchor, Configuration $config): int
     {
-        $invocation = Arguments::parse($arguments, [self::PullRequest, self::Refresh, self::Json]);
+        $invocation = Arguments::parse(
+            $arguments,
+            [self::PullRequest, self::Refresh, self::Json],
+            takes: Arity::nameAndBase($this->name()),
+        );
+
         $name = $invocation->at(0);
         $pullRequest = $invocation->has(self::PullRequest);
 
-        // An empty argument is the same mistake as no argument — `create "$ISSUE"`
-        // with nothing in `$ISSUE` — and the same answer, rather than the
-        // operational failure the naming layer would report a moment later.
+        // The one missing-name refusal {@see Arity} cannot write, because what
+        // to call the thing changes with the flag. An empty argument is the
+        // same mistake as no argument — `create "$ISSUE"` with nothing in
+        // `$ISSUE` — and gets the same answer, rather than the operational
+        // failure the naming layer would report a moment later.
         if ($name === null || trim($name) === '') {
             throw new UsageException($pullRequest
                 ? 'name the pull request: its number'
                 : 'name the worktree: an issue number, or a branch name');
-        }
-
-        if ($invocation->at(2) !== null) {
-            throw new UsageException(
-                'create takes a name and, at most, a base to fork from; given '
-                .implode(' ', $invocation->positional)
-            );
         }
 
         // A base is the one argument `--pr` cannot mean: the head branch is
