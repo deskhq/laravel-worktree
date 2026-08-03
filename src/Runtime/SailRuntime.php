@@ -59,6 +59,19 @@ final readonly class SailRuntime implements Runtime
     /** Sail's own escape from its pre-flight checks. Set in one place; see {@see self::shell()}. */
     public const string SkipChecks = 'SAIL_SKIP_CHECKS';
 
+    /**
+     * How an application that has no Sail gets one.
+     *
+     * The one phrase the pre-flight and the post-condition share, and the only
+     * thing they may share: `worktree doctor` asks whether the `composer.json` a
+     * worktree resolves *declares* Sail, and {@see obtainSail()} asks whether
+     * the install *produced* it. Those are two different questions with two
+     * different answers — a path repository or a `replace` satisfies the second
+     * without satisfying the first — so they are two checks, and only the remedy
+     * is written once (#74).
+     */
+    public const string Install = 'composer require laravel/sail --dev';
+
     public function __construct(
         private Output $output,
         private ProcessRunner $runner,
@@ -112,7 +125,21 @@ final readonly class SailRuntime implements Runtime
      * call is made by `create` and by `start` and the answer to "what now?" is
      * different: see {@see Runtime::boot()}.
      *
-     * @throws WorktreeException when Sail cannot be obtained, when either half ran past `boot_timeout`, or when the service refuses to start.
+     * ## The daemon is asked first
+     *
+     * {@see stop()} and {@see teardown()} have always short-circuited on a
+     * daemon that is not answering; this one used to run anyway and fail three
+     * minutes later on the exit code of `sail up -d`, having pulled a
+     * `vendor/` through a Composer container that could not start either.
+     * `worktree doctor` reported the closed daemon all along, and being *looser*
+     * than the report is the direction that costs somebody an afternoon (#74).
+     *
+     * It is still only a warning in the report, deliberately: a closed Docker
+     * Desktop is a moment rather than a misconfiguration, and a CI job checking
+     * a `compose.yaml` change on a runner with no daemon should not go red.
+     * Here, where something is actually about to be started, it is a refusal.
+     *
+     * @throws WorktreeException when no daemon is answering, when Sail cannot be obtained, when either half ran past `boot_timeout`, or when the service refuses to start.
      */
     public function boot(Identity $worktree, string $environmentFile, ?string $halted = null, ?string $remedy = null): void
     {
@@ -120,6 +147,13 @@ final readonly class SailRuntime implements Runtime
         $remedy ??= "'worktree create $worktree->name' picks up where it left off";
 
         $service = AppService::in(is_file($environmentFile) ? Assignments::read($environmentFile) : Assignments::of(''));
+
+        if (! $this->docker->isRunning()) {
+            throw new WorktreeException(
+                "there is no Docker daemon answering on this machine, so $service could not be started; "
+                ."$halted — start Docker, then $remedy"
+            );
+        }
 
         try {
             $this->obtainSail($worktree);
@@ -328,7 +362,7 @@ final readonly class SailRuntime implements Runtime
         throw new WorktreeException(
             'there is still no '.self::Binary." in $worktree->path after bootstrapping vendor/ with $this->composerImage: "
             .'this runtime drives a worktree through Sail, so the application needs laravel/sail in its composer.json '
-            .'(composer require laravel/sail --dev) — or that install failed, in which case its output is just above this line'
+            .'('.self::Install.') — or that install failed, in which case its output is just above this line'
         );
     }
 }

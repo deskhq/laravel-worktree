@@ -289,20 +289,18 @@ final class Lock
 
         $liveness = $owner->liveness($this->machine);
 
+        // The holder and its liveness in one clause, written where the record
+        // is ({@see Owner::heldBy()}) rather than here: `unlock` and `doctor`
+        // say the same thing about the same lock, and used to say it in three
+        // wordings (#74).
         if ($liveness === Liveness::Gone && $this->breakOpen($owner)) {
             $this->output->line(
-                "the lock at $this->path was taken by ".$owner->describe()
-                .', which is not running any more; breaking it and taking it'
+                "the lock at $this->path was ".$owner->heldBy($liveness).'; breaking it and taking it'
             );
 
             return;
         }
 
-        $this->output->line(
-            "waiting for the lock at $this->path, taken by ".$owner->describe()
-            .($liveness === Liveness::Unknown
-                ? ' — another machine, so nothing here can tell whether it is still running'
-                : '')
-        );
+        $this->output->line("waiting for the lock at $this->path, ".$owner->heldBy($liveness));
     }
 }

@@ -82,14 +82,14 @@ final readonly class Overlay
             );
         }
 
+        if (! self::isWritten($compose)) {
+            return null;
+        }
+
         // The file bin/sail sources, so the file that decides what the app
         // service is called and which Compose files it is already given.
         $environment = Assignments::read($environmentFile);
         $services = self::services($identity, $ports, $compose, AppService::in($environment));
-
-        if ($services === []) {
-            return null;
-        }
 
         $this->version->verify();
 
@@ -112,6 +112,27 @@ final readonly class Overlay
         $environment->upsert([self::Variable => $this->sailFiles($environment, $identity)], $identity->key)->save($environmentFile);
 
         return $target;
+    }
+
+    /**
+     * Whether this configuration produces an overlay at all.
+     *
+     * An empty `keep_services` means "leave `depends_on` as `compose.yaml`
+     * declares it" and an empty `port_overrides` means nothing is republished,
+     * so a repository that configures neither has no {@see self::File} written
+     * for it, is never handed the `!override` merge tag, and is not affected by
+     * how old this machine's Compose is.
+     *
+     * Public because that last clause is the difference between a `doctor` that
+     * refuses over a Compose version and a create that would have worked: the
+     * version pre-flight below runs only when this says so, and the report has
+     * to be able to ask the same question (#74).
+     *
+     * @param  array{keep_services: list<string>, port_overrides: array<string, list<string>>}  $compose  `compose`, as configured.
+     */
+    public static function isWritten(array $compose): bool
+    {
+        return $compose['keep_services'] !== [] || $compose['port_overrides'] !== [];
     }
 
     /**

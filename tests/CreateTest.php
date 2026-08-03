@@ -334,10 +334,9 @@ it('refuses a create whose started services publish a host port nothing offsets'
 
     expect($process)->toHaveExited(1)
         ->and($process->getOutput())->toBe('')
-        ->and($process->getErrorOutput())
-        ->toContain("redis publishes '\${FORWARD_REDIS_PORT:-6379}:6379'")
-        ->toContain('started because laravel.test depends on it, and it is the app service')
-        ->toContain("add 'FORWARD_REDIS_PORT' => '{{port.redis}}' to 'env'")
+        // The pre-flight's own refusal, in full, rather than a second copy of it
+        // typed out here: PublishedPortsTest pins the wording (#74).
+        ->and($process->getErrorOutput())->toContain(publishedPortRefusal($this->main))
         // Nothing claimed, nothing attached, nothing generated.
         ->and($this->home.'/registry.json')->not->toBeFile()
         ->and($this->worktree)->not->toBeDirectory();
@@ -349,6 +348,33 @@ it('refuses a create whose started services publish a host port nothing offsets'
     ]]);
 
     expect(worktreeCreate())->toHaveSucceeded();
+});
+
+/**
+ * The other half of that pre-flight, and the one this command had no answer for
+ * before #74: `bin/sail` boots whatever `APP_SERVICE` resolves to, and a name
+ * the Compose file does not carry used to be found out by `sail up -d`, on the
+ * far side of a `vendor/` bootstrap that costs minutes.
+ *
+ * Said rather than refused, and that is deliberate: `include:` and `extends:`
+ * are not followed, so a service reached through one of those is real and
+ * invisible here — a refusal would be this package telling somebody their
+ * working application is broken. `worktree doctor` reports the same sentence,
+ * built in the same place.
+ */
+it('says so before it bootstraps anything when the Compose file declares no such app service', function () {
+    file_put_contents($this->main.'/.env', "APP_NAME=Desk\nAPP_KEY=\nAPP_SERVICE=web\n");
+
+    $process = worktreeCreate();
+
+    expect($process)->toHaveSucceeded()
+        ->and($process->getErrorOutput())
+        ->toContain("compose.yaml declares no service named 'web', which is what APP_SERVICE resolves to in this "
+            ."checkout; a create runs 'sail up -d web', so either that name is wrong or the service is reached "
+            .'through an include: or extends:, which is not followed here')
+        // Before anything was attached, which is the whole value of saying it.
+        ->and(strpos($process->getErrorOutput(), 'declares no service'))
+        ->toBeLessThan((int) strpos($process->getErrorOutput(), 'bootstrapping vendor/'));
 });
 
 it('refuses to work in a worktree somebody has switched branches in', function () {

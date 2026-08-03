@@ -235,6 +235,26 @@ final readonly class Owner
     }
 
     /**
+     * Who has this lock and whether they are still there, as one clause.
+     *
+     * The sentence three callers were each writing their own version of (#74):
+     * {@see Lock::confront()} says it while waiting, `worktree unlock` says it
+     * while refusing, and `worktree doctor` says it in a report — and *"which is
+     * not running any more"* appeared in all three. The judgement was already
+     * shared ({@see liveness()}); this is the wording of it, so that a lock
+     * described in a report and the same lock described by the run that waits
+     * for it read identically.
+     */
+    public function heldBy(Liveness $liveness): string
+    {
+        return 'taken by '.$this->describe().match ($liveness) {
+            Liveness::Alive => ', which is still running',
+            Liveness::Gone => ', which is not running any more',
+            Liveness::Unknown => ', on another machine — nothing here can tell whether it is still running',
+        };
+    }
+
+    /**
      * @return array<string, string|int|null>
      */
     public function toArray(): array

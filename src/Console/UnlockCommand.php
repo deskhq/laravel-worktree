@@ -150,13 +150,15 @@ final readonly class UnlockCommand implements Command
 
     /**
      * Why a lock was left alone, and what to type if that is the wrong answer.
+     *
+     * Who holds it and whether they are still there is {@see Owner::heldBy()}'s
+     * sentence rather than this command's: the same lock is described by the run
+     * waiting for it and by `worktree doctor`, and the three of them used to
+     * word it three ways (#74).
      */
     private function refusal(Lock $lock, Owner $owner, Liveness $liveness): string
     {
-        return $lock->path().' is held by '.$owner->describe().', '
-            .($liveness === Liveness::Alive
-                ? 'and that process is still running'
-                : 'which is another machine — nothing here can tell whether it is still running')
+        return $lock->path().' is '.$owner->heldBy($liveness)
             .'; wait for it to finish, or pass --force to remove it anyway';
     }
 
@@ -168,9 +170,9 @@ final readonly class UnlockCommand implements Command
     {
         $this->output->line('removed '.$lock->path().', '.($owner === null
             ? 'which recorded no holder — nothing here could say whether one was still running'
-            : 'taken by '.$owner->describe().', '.($liveness === Liveness::Gone
-                ? 'which is not running any more'
-                : 'which this run was told to remove regardless')));
+            : $owner->heldBy($liveness ?? Liveness::Unknown).($liveness === Liveness::Gone
+                ? ''
+                : ', and this run was told to remove it regardless')));
     }
 
     private function report(int $removed, int $refused, int $missed, bool $nothingAtAll): int

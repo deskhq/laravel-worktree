@@ -82,6 +82,25 @@ it('takes its Docker from SAIL_DOCKER_BINARY and its Composer image from WORKTRE
         ->and(sailInvocations())->toBe(['up -d laravel.test']);
 });
 
+/**
+ * The check `worktree doctor` was making and this runtime was not (#74). A boot
+ * against a closed daemon used to pull a `vendor/` through a Composer container
+ * that could not start either, and then fail on the exit code of `sail up -d`
+ * with nothing on screen naming the daemon. `stop()` and `teardown()` have
+ * always short-circuited here; this is the third.
+ */
+it('refuses to boot against a daemon that is not answering, before it pulls anything', function () {
+    $docker = fakeDockerBinary($this->root, daemon: false);
+
+    expect(fn () => runtime($docker)->boot($this->identity, $this->path.'/.env'))
+        ->toThrow(WorktreeException::class, 'there is no Docker daemon answering on this machine, so laravel.test could not be started')
+        ->and(fn () => runtime($docker)->boot($this->identity, $this->path.'/.env'))
+        ->toThrow(WorktreeException::class, "start Docker, then 'worktree create 441' picks up where it left off")
+        // Nothing was pulled, and no Sail was reached for.
+        ->and(invocationsLike('run --rm'))->toBe([])
+        ->and($this->path.'/vendor/bin/sail')->not->toBeFile();
+});
+
 it('says what to do when the bootstrap container leaves no Sail behind', function () {
     expect(fn () => runtime(producesSail: false)->boot($this->identity, $this->path.'/.env'))
         ->toThrow(WorktreeException::class, 'there is still no vendor/bin/sail in '.$this->path)
