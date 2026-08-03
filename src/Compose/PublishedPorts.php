@@ -67,9 +67,27 @@ final readonly class PublishedPorts
      */
     public function verify(Configuration $config): void
     {
+        $problem = $this->problem($config);
+
+        if ($problem !== null) {
+            throw new WorktreeException($problem);
+        }
+    }
+
+    /**
+     * The refusal {@see verify()} would raise, or null when every published host
+     * port a worktree's services bind is one something offsets.
+     *
+     * Split out so that `worktree doctor` can report this check without a create
+     * — the same sentence, built in the same place, since it is one of the best
+     * things this package says and a second wording of it would be a second
+     * thing to keep true (#57).
+     */
+    public function problem(Configuration $config): ?string
+    {
         $collisions = [];
 
-        foreach (StartedServices::of($this->services, $this->appService, $config->compose, $config->steps) as $service => $why) {
+        foreach ($this->started($config) as $service => $why) {
             // The overlay replaces this service's whole `ports:` list, so what
             // the application's file publishes for it is no longer published.
             if (array_key_exists($service, $config->compose['port_overrides'])) {
@@ -86,16 +104,30 @@ final readonly class PublishedPorts
         }
 
         if ($collisions === []) {
-            return;
+            return null;
         }
 
-        throw new WorktreeException(
-            Schema::File.': '.count($collisions).' published host '.(count($collisions) === 1 ? 'port' : 'ports')
+        return Schema::File.': '.count($collisions).' published host '.(count($collisions) === 1 ? 'port' : 'ports')
             .' would be the same in every worktree, so the second one to start would die on a Docker bind error '
             ."naming a port nothing here configures:\n\n".implode("\n\n", $collisions)
             ."\n\nEvery published port of every service a worktree starts needs an entry — including the services "
-            .'it starts through depends_on rather than by name.'
-        );
+            .'it starts through depends_on rather than by name.';
+    }
+
+    /**
+     * Every service a worktree would start, keyed by name and valued by why —
+     * which is what this checks the published ports of.
+     *
+     * Public because it is an answer in its own right: it is the thing nobody can
+     * work out in their head ({@see StartedServices}), and a report that says
+     * *these twelve services would start, and none of them collides* is worth
+     * more than one that says only that nothing is wrong.
+     *
+     * @return array<string, string>
+     */
+    public function started(Configuration $config): array
+    {
+        return StartedServices::of($this->services, $this->appService, $config->compose, $config->steps);
     }
 
     /**

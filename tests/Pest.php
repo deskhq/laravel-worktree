@@ -394,6 +394,15 @@ function worktreeReap(array $arguments = []): Process
 }
 
 /**
+ * @param  list<string>  $arguments
+ * @param  array<string, string|false>  $env
+ */
+function worktreeDoctor(array $arguments = [], array $env = []): Process
+{
+    return worktree(['doctor', ...$arguments], env: $env);
+}
+
+/**
  * The main checkout the command cases run from: a repository with a compose
  * file, one commit, and a `.env` of the shape a Laravel application has.
  */
@@ -1032,6 +1041,7 @@ function diagnosticsIn($diagnostics): string
  * @param  bool  $daemon  Whether `docker info` succeeds at all.
  * @param  bool  $composeSubcommand  Whether `docker compose` exists, or only the standalone binary.
  * @param  bool  $producesSail  Whether `docker run` leaves a `vendor/bin/sail` behind, as the Composer image would.
+ * @param  string  $composeVersion  What `compose version --short` answers with; `''` for a build that names no version.
  */
 function fakeDockerBinary(
     string $root,
@@ -1044,6 +1054,7 @@ function fakeDockerBinary(
     string $composeOutput = '',
     bool $composeSubcommand = true,
     bool $producesSail = true,
+    string $composeVersion = '2.31.0',
 ): string {
     $state = $root.'/fake';
 
@@ -1110,8 +1121,13 @@ function fakeDockerBinary(
 
         # `docker compose` is probed before it is used; a machine carrying only
         # the standalone binary answers no here, and bin/sail drops to that.
+        # `--short` is the version pre-flight asking whether this Compose knows
+        # the '!override' merge tag, and it answers before the daemon check
+        # below because it is a question about the client rather than about a
+        # daemon that may not be running.
         if [ "\$1" = compose ] && [ "\$2" = version ]; then
             [ '{$answers['compose']}' = yes ] || exit 127
+            [ "\$3" != --short ] || printf '%s\\n' '$composeVersion'
             exit 0
         fi
 

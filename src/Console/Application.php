@@ -20,6 +20,10 @@ use DeskHQ\LaravelWorktree\Support\ContainerRefusal;
  * released however it ends, the repository has been anchored, and its
  * configuration has been read and understood.
  *
+ * The last of those is the only one a command may decline ({@see Diagnostic}),
+ * and exactly one does: `doctor` reports on a configuration that would not load
+ * rather than ending with it.
+ *
  * The usage text is built from the commands registered below, so a command that
  * exists is a command that is listed — there is no second place to update.
  */
@@ -54,7 +58,8 @@ final class Application
             ->register(new StartCommand($output, $runner, $shutdown))
             ->register(new RemoveCommand($output, $runner, $shutdown))
             ->register(new ReapCommand($output, $runner, $shutdown, new Confirmation($output)))
-            ->register(new UnlockCommand($output, $runner, $shutdown));
+            ->register(new UnlockCommand($output, $runner, $shutdown))
+            ->register(new DoctorCommand($output, new Emitter, $runner, $shutdown));
     }
 
     public function register(Command $command): self
@@ -104,7 +109,21 @@ final class Application
         try {
             $anchor = Anchor::resolve($this->runner, $this->workingDirectory());
 
-            return $command->run($arguments, $anchor, Configuration::load($anchor->mainRoot));
+            try {
+                $config = Configuration::load($anchor->mainRoot);
+            } catch (WorktreeException $unreadable) {
+                // The one guarantee a command may decline: `doctor` is the
+                // command whose subject is this very failure, and a report that
+                // named the offending key and then said nothing about the
+                // machine would be the refusal every other command already gives.
+                if (! $command instanceof Diagnostic) {
+                    throw $unreadable;
+                }
+
+                return $command->diagnose($arguments, $anchor, $unreadable);
+            }
+
+            return $command->run($arguments, $anchor, $config);
         } catch (UsageException $e) {
             // Called wrong rather than failed, so `EX_USAGE` and the one line
             // of usage that answers it — the whole usage text would bury it.
@@ -132,7 +151,9 @@ final class Application
 
     /**
      * Usage is a diagnostic, so it goes to stderr like every other one — even
-     * when it was asked for. Only `create` and `list` ever write to stdout.
+     * when it was asked for. The only things that ever reach stdout are the
+     * answers a script reads: `create`'s path, `path`'s path, `list`'s table,
+     * and the object each of those and `doctor` emit under `--json`.
      */
     private function printUsage(): void
     {

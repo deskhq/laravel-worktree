@@ -26,7 +26,7 @@ This is the first thing worth understanding, because it is otherwise the first i
 
 The implementation is a binary — `vendor/bin/worktree` — and not `php artisan worktree:create`. Under Sail, artisan runs **inside the app container**, and from in there every single thing this package needs is unreachable: there is no Docker socket to create containers with, no host git to add a worktree to, no sibling worktrees directory, and no way to bind a host port. A worktree also has no `vendor/` at the moment it is created, so there is no application to boot and no artisan to run in the first place.
 
-`php artisan worktree:{create,path,list,remove,reap,unlock}` do exist, as a facade. Called from inside the container they refuse and tell you what to run instead:
+`php artisan worktree:{create,path,list,stop,start,remove,reap,unlock,doctor}` do exist, as a facade. Called from inside the container they refuse and tell you what to run instead:
 
 ```
 worktree must run on the host, not inside the container.
@@ -46,6 +46,8 @@ Laravel is never booted by the binary. Nothing in it depends on an application t
 | `gh` | **optional.** It enriches a numeric slug with the issue title. Absent, logged out, offline, or pointed at a repository with no such issue are all the same ordinary answer. |
 
 No `jq`. The bash original this replaces needed it; nothing here does.
+
+`worktree doctor` [checks every row of this table](#checking-all-of-it-without-creating-anything) against the machine in front of you, and creates nothing to do it.
 
 ## Installation
 
@@ -83,11 +85,12 @@ cd "$(./vendor/bin/worktree create 441)"   # enter a worktree, making it if it i
 ./vendor/bin/worktree remove 441
 ./vendor/bin/worktree reap
 ./vendor/bin/worktree unlock 441
+./vendor/bin/worktree doctor            # every pre-flight a create makes, creating nothing
 ```
 
 The first two lines look alike and are not. `create` is the **write path**: it takes the worktree's lock for the whole run, retries whatever is recorded as degraded, verifies `HEAD`, and bootstraps a worktree for a slug it has never seen — which is right when you are entering one, and wrong when a script only wanted the directory. `path` is the read: no lock, no Docker, no `gh`, nothing written, and a typo'd slug is an exit code rather than five minutes of Docker and a slot. Scripts and shell functions want `path`.
 
-Only machine-readable output — the path from `create` and from `path`, the table from `list` — reaches stdout. Every diagnostic, and the whole output of every subprocess it runs, goes to stderr, so `cd "$(...)"` keeps working on a run that also produced megabytes of Composer and npm output.
+Only machine-readable output — the path from `create` and from `path`, the table from `list`, the object any of them and `doctor` emit under `--json` — reaches stdout. Every diagnostic, and the whole output of every subprocess it runs, goes to stderr, so `cd "$(...)"` keeps working on a run that also produced megabytes of Composer and npm output.
 
 Exit codes: `0` success, `1` operational failure, `64` usage error. An interrupted run (`130`) or a terminated one (`143`) still releases everything it was holding.
 
@@ -502,6 +505,91 @@ It names what it is about to remove and who took it, and **refuses a lock whose 
 
 Nothing here reads or writes the registry, and nothing here touches a container, a volume or a worktree. A lock is a directory, and this removes it.
 
+## Checking all of it, without creating anything
+
+```bash
+worktree doctor [--json]
+```
+
+This package knows a great deal about a repository and a machine — that Compose is new enough for the overlay, that `config/worktree.php` is legal, that every host port a worktree would publish is one something offsets, that the slot's ports are free — and every one of those checks used to fire only as a side effect of `create`. So the way to find out whether a repository was configured correctly was to bootstrap a worktree, and the way to find out whether a machine could run one was to try.
+
+`doctor` is those same checks, in one report, **creating nothing and destroying nothing**:
+
+```
+$ worktree doctor
+worktree doctor — /Users/agent/the-desk
+
+ok    config   config/worktree.php is understood: 50 slots of 10 ports from 20000, publishing app, vite, reverb, db, redis, and 11 bootstrap steps
+ok    names    this repository is 'the-desk', so its worktrees are Compose projects named wt-the-desk-<slug>, in /Users/agent/the-desk-worktrees
+ok    compose  Docker Compose 2.31.0, which is at least 2.24 and so understands the '!override' merge tag compose.worktree.yaml is written with
+ok    service  the app service is 'laravel.test', which compose.yaml declares; a create boots the worktree with 'sail up -d laravel.test'
+ok    sail     composer.json requires laravel/sail, which a create installs into the worktree through a throwaway Composer container before anything else runs
+fail  ports    config/worktree.php: 1 published host port would be the same in every worktree, so the second one to start would die on a Docker bind error naming a port nothing here configures:
+
+                 redis publishes '${FORWARD_REDIS_PORT:-6379}:6379'
+                   started because reverb depends on it, and the bootstrap step 'sail up -d reverb' starts it
+                   add 'FORWARD_REDIS_PORT' => '{{port.redis}}' to 'env'
+
+               Every published port of every service a worktree starts needs an entry — including the services it starts through depends_on rather than by name.
+ok    docker   the Docker daemon is answering ('docker info')
+warn  gh       gh is not on this PATH, so 'worktree create 441' names the worktree issue-441 rather than 441-fix-login; nothing else in this package needs it
+ok    slots    3 of 50 slots are claimed on this machine, so 47 are free
+ok    block    slot 3 is the next one a create would take, and its ports (20030-20034) are free
+ok    locks    no lock is held on this machine
+warn  entries  1 registry entry holds a slot whose worktree directory is gone:
+                 wt-the-desk-feat-search  slot 2, /Users/agent/the-desk-worktrees/feat-search
+               'worktree reap' reclaims it
+ok    orphans  no project of the-desk is on this daemon that no worktree claims
+
+13 checks: 10 ok, 2 warn, 1 fail
+a 'worktree create' would stop on the failure above; nothing was created, started or removed by this run
+```
+
+| Check | What it asks |
+| --- | --- |
+| `config` | `config/worktree.php` loads, and says nothing this package does not understand |
+| `names` | this repository has a name, and it is one Docker will accept as a project |
+| `compose` | Docker Compose is new enough for the `!override` merge tag |
+| `service` | `APP_SERVICE` resolves to a service the [Compose file](#the-compose-overlay) declares |
+| `sail` | there is a `laravel/sail` for the worktree to be driven through |
+| `ports` | [every published host port](#the-published-port-pre-flight) a worktree's services bind is offset per worktree |
+| `docker` | there is a daemon to boot anything on |
+| `gh` | issue titles are available, which is what names a numeric slug |
+| `slots` | how much of the slot range this machine has claimed |
+| `block` | the next slot a create would take has a free block of host ports |
+| `locks` | every [lock](#locks-and-the-ones-nobody-holds) on this machine has a holder that is still running |
+| `entries` | every registry entry has a worktree directory behind it |
+| `orphans` | nothing on this daemon carries a `wt-` project name no worktree claims |
+
+Every check runs. One that fails does not stop the ones after it, because *"it failed"* is worth far less than a list somebody can paste.
+
+| Verdict | What it means |
+| --- | --- |
+| `ok` | asked, and answered |
+| `warn` | true and worth saying, and not something a create stops on |
+| `fail` | a create would stop here — **the only verdict that makes the run exit non-zero** |
+| `unchecked` | the question could not be put at all |
+
+`unchecked` is the one worth defending. With no daemon answering, the orphan scan is not passing and is not failing, and reporting a machine as clean on the strength of a question nobody could ask is [the failure this package keeps a whole class for](#reaping). The same goes for a `config/worktree.php` that will not load: `doctor` reports it as a failed check — every other command ends on it before it reaches a command at all — and then marks everything that reads that file `unchecked` rather than passing it.
+
+Nothing here writes anything. The registry, the lock directory and the Compose file are read, the daemon is asked what it has, and the bind probe opens sockets and closes them again. No slot is claimed, no lock is taken, no directory is made and no container is started.
+
+Two checks would want a slot, and `doctor` is not allocating one. The published-port pre-flight needs none — it is about whether a mapping moves per worktree, not about which numbers this one would get — and the port block is probed on the **next slot a create would take**, skipping blocks something outside the registry is holding exactly as the allocator skips them, and saying which slot it landed on.
+
+`--json` emits the whole report as one object, on stdout, because an agent dropped into an unfamiliar repository is a first-class caller here and its question — *can I create a worktree in this thing?* — is exactly this command's:
+
+```json
+{"repository":"/Users/agent/the-desk","ok":false,"checks":[{"name":"config","verdict":"ok","message":"config/worktree.php is understood: …"}],"counts":{"ok":10,"warn":2,"fail":1,"unchecked":0}}
+```
+
+Which makes it a CI job worth having. `compose.yaml` gaining a published port nobody offset is a change to the *application*, made by somebody who has never read this package's configuration, and it is caught on the pull request that made it rather than on the next colleague's second worktree:
+
+```yaml
+- run: ./vendor/bin/worktree doctor
+```
+
+A runner with no Docker daemon still checks everything that is pure computation, and says so about the rest.
+
 ## Configuration
 
 Everything is optional. A repository with no `config/worktree.php` runs on the defaults below.
@@ -745,6 +833,8 @@ Step 4 is the whole point, and the reason a refusal names the chain rather than 
 A refusal rather than a warning, because a warning here is one nobody reads until the bind error arrives anyway. Two cases get their own message, because *"add it to `env`"* is no help in either. A literal host port — `'8025:8025'`, with no variable in it — has nothing for `env` to assign, so `port_overrides` is the only fix. And a variable `env` assigns a **fixed** value to is not offset by having been mentioned: that is [trap 1](#two-traps) exactly, `REVERB_PORT` pinned for the container's sake and never remapped on the published side.
 
 The check is pure parsing: no daemon, nothing to start, and no cost to a create that passes it. Two limits follow from that. `include:` and `extends:` are not followed, so a service reached only through one of those is invisible to it. And profiles are modelled only far enough to keep a bare `sail up -d` from counting a profiled service as started.
+
+Because it is pure parsing, it does not need a create to run at all: [`worktree doctor`](#checking-all-of-it-without-creating-anything) makes exactly this check, with exactly this message, against a repository nobody has bootstrapped yet.
 
 ### Not `compose.override.yaml`
 
