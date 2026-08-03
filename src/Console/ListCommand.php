@@ -13,13 +13,15 @@ use DeskHQ\LaravelWorktree\Registry\Entry;
 use DeskHQ\LaravelWorktree\Registry\Registry;
 use DeskHQ\LaravelWorktree\Runtime\Orphan;
 use DeskHQ\LaravelWorktree\Runtime\Orphans;
+use DeskHQ\LaravelWorktree\Runtime\Presence;
+use DeskHQ\LaravelWorktree\Runtime\Status;
 
 /**
  * What this machine is holding, and what it is holding that nothing claims.
  *
  * ```
- * KEY                    SLOT  APP    VITE   REVERB  DB     REDIS  BRANCH         PATH
- * wt-desk-441-fix-login  0     20000  20001  20002   20003  20004  441-fix-login  /Users/…
+ * KEY                    SLOT  APP    VITE   REVERB  DB     REDIS  PATH           STATUS   AGE
+ * wt-desk-441-fix-login  0     20000  20001  20002   20003  20004  441-fix-login  running  4h
  * ```
  *
  * The table is the second thing in this package allowed on stdout, and the
@@ -52,25 +54,46 @@ use DeskHQ\LaravelWorktree\Runtime\Orphans;
  * question has no answer inside one repository, because the port it asks about
  * may belong to a clone somebody else's terminal is in.
  *
- * ## A row is not a worktree
+ * ## What is claimed, and what is actually there
  *
- * An entry whose `path` is not a directory any more claims a slot and a port
- * block with nothing behind it, and the table used to render it identically to
- * a healthy one — which is what made "which of these fifty is real?"
- * unanswerable (#53). It carries a `STATUS` of `gone` instead, from the test
- * {@see DeadEntries} makes and `reap` sweeps by, so the column and the sweep
- * cannot disagree about the same fact.
+ * Every column above comes out of the registry, which is a faithful report of
+ * what has been *claimed* and silent on the questions somebody with five
+ * worktrees open has: which of these is up, which is idle eating nothing, did
+ * that one ever finish bootstrapping, and how long has that one been sitting
+ * there. Two more columns, both on the end where a column added later does not
+ * move the fields a script reads by position:
  *
- * The column is on the end, where a new one does not move the fields a script
- * already reads by position, and it is in the piped rendering always: that one
- * is a contract, and a field that comes and goes is not one. The terminal
- * rendering carries it only when there is something to say, on the same rule
- * that drops `BRANCH` — a column of `ok` is width spent on nothing.
+ * - **`STATUS`** ({@see Status}) — one word for what the row is, reconciling
+ *   the registry's facts with the daemon's. `gone` is #53's, from the test
+ *   {@see DeadEntries} makes and `reap` sweeps by, so the column and the sweep
+ *   cannot disagree; the rest are new (#54).
+ * - **`AGE`** ({@see Age}) — how long ago the slot was claimed, from the
+ *   `created_at` entries have always carried and nothing ever showed.
  *
- * `--json` is deliberately unchanged. Its payload is the registry entry as
- * `create --json` and `path --json` publish it, and none of the three consults
- * the disk; a reader that wants this fact has the absolute path and one
- * `test -d`.
+ * Both are in both renderings and always: the piped one is a contract and a
+ * field that comes and goes is not one, and the fitted one no longer has the
+ * excuse it had while `STATUS` could only say `ok` — every token it prints now
+ * is something a person acts on, so none of them is width spent on nothing.
+ *
+ * ## One query for the whole table
+ *
+ * The daemon is asked once per run, for every container on the machine and the
+ * state it is in, and that one answer fills the column for every row
+ * ({@see Orphans::containers()}) — ten worktrees must not mean ten `docker`
+ * invocations. It is literally the query the orphan warning was already making
+ * and throwing half of away.
+ *
+ * A machine with no daemon keeps the whole table: `STATUS` becomes `unknown`,
+ * which is neither a failure nor an inferred clean bill of health, on the rule
+ * the orphan warning is already under. `gone` and `degraded` are registry facts
+ * and survive it.
+ *
+ * `--json` gets both, as fields rather than as a rendering: `status` beside the
+ * entry, and `age_seconds` rather than `4d`, because a script that asked for
+ * structure wants the subtraction and not the word for it. The payload is
+ * otherwise the entry exactly as `create --json` and `path --json` publish it —
+ * a superset rather than a different object, since those two answer about a
+ * worktree in hand and neither pays for a daemon query to do it.
  *
  * ## The warning is the point
  *
@@ -132,12 +155,17 @@ final readonly class ListCommand implements Command
         // it at all.
         $repoSlug = $everywhere ? null : $this->repoSlug($anchor, $config);
 
+        // One scan for the whole run: the column below and the warning at the
+        // end are the same query, asked once and shared, rather than a second
+        // trip to the daemon for a fact it already answered.
+        $scan = Orphans::for($registry, $this->runner, $this->output);
+
         if ($invocation->has(self::Json)) {
             // Emitted even when there is nothing: a script that asked for JSON
             // is parsing this, and an empty array is the answer it can parse.
-            $this->emitter->emit(self::json($entries));
+            $this->emitter->emit(self::json($entries, $scan->containers()));
         } elseif ($entries !== []) {
-            $this->tabulate($entries, $config->ports);
+            $this->tabulate($entries, $config->ports, $scan->containers());
         }
 
         if ($entries === []) {
@@ -146,7 +174,8 @@ final readonly class ListCommand implements Command
         }
 
         $this->point($entries, $everywhere);
-        $this->warn($registry, $repoSlug);
+        $this->retry($entries);
+        $this->warn($scan, $repoSlug);
 
         return ExitCode::Success;
     }
@@ -157,16 +186,17 @@ final readonly class ListCommand implements Command
      *
      * @param  array<string, Entry>  $entries
      * @param  list<string>  $ports
+     * @param  array<string, Presence>|null  $daemon  What the daemon has, or null when there was none to ask.
      */
-    private function tabulate(array $entries, array $ports): void
+    private function tabulate(array $entries, array $ports, ?array $daemon): void
     {
         if ($this->emitter->isInteractive()) {
-            $this->fitted($entries, $ports);
+            $this->fitted($entries, $ports, $daemon);
 
             return;
         }
 
-        [$headers, $rows] = self::table($entries, $ports);
+        [$headers, $rows] = self::table($entries, $ports, $daemon);
 
         foreach (Table::tsv($headers, $rows) as $line) {
             $this->emitter->emit($line);
@@ -192,8 +222,9 @@ final readonly class ListCommand implements Command
      *
      * @param  array<string, Entry>  $entries
      * @param  list<string>  $ports
+     * @param  array<string, Presence>|null  $daemon
      */
-    private function fitted(array $entries, array $ports): void
+    private function fitted(array $entries, array $ports, ?array $daemon): void
     {
         $style = Style::forStream($this->emitter->isInteractive());
         $root = self::sharedRoot($entries);
@@ -201,9 +232,9 @@ final readonly class ListCommand implements Command
         [$headers, $rows] = self::table(
             $entries,
             $ports,
+            $daemon,
             ! self::impliesItsBranches($entries),
             $root,
-            self::holdsADeadEntry($entries),
         );
 
         // Whole, and never elided to fit: it is the one line here that is prose
@@ -229,17 +260,17 @@ final readonly class ListCommand implements Command
      *
      * @param  array<string, Entry>  $entries
      * @param  list<string>  $ports
+     * @param  array<string, Presence>|null  $daemon
      * @param  bool  $branches  Whether a `BRANCH` column is carried at all.
      * @param  string|null  $root  The directory paths are shown relative to, or null for absolute ones.
-     * @param  bool  $status  Whether a `STATUS` column is carried at all.
      * @return array{list<string>, list<list<string>>}
      */
     private static function table(
         array $entries,
         array $ports,
+        ?array $daemon,
         bool $branches = true,
         ?string $root = null,
-        bool $status = true,
     ): array {
         $headers = [
             'KEY',
@@ -247,7 +278,8 @@ final readonly class ListCommand implements Command
             ...array_map(strtoupper(...), $ports),
             ...($branches ? ['BRANCH'] : []),
             'PATH',
-            ...($status ? ['STATUS'] : []),
+            'STATUS',
+            'AGE',
         ];
 
         $rows = [];
@@ -265,28 +297,12 @@ final readonly class ListCommand implements Command
                 ...$published,
                 ...($branches ? [$entry->branch] : []),
                 self::under($entry->path, $root),
-                ...($status ? [DeadEntries::status($entry)] : []),
+                Status::of($entry, $daemon)->value,
+                Age::describe(Age::seconds($entry->createdAt)),
             ];
         }
 
         return [$headers, $rows];
-    }
-
-    /**
-     * Whether any row is a slot with nothing behind it, which is the only thing
-     * a `STATUS` column has to say in the rendering that pays for it in width.
-     *
-     * @param  array<string, Entry>  $entries
-     */
-    private static function holdsADeadEntry(array $entries): bool
-    {
-        foreach ($entries as $entry) {
-            if (DeadEntries::isDead($entry)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**
@@ -393,18 +409,46 @@ final readonly class ListCommand implements Command
     }
 
     /**
+     * What to do about the rows marked `degraded`, on stderr.
+     *
+     * The same discipline as {@see point()}: a marker whose remedy is not named
+     * anywhere near it is read as decoration. The remedy is re-entry — running
+     * `create` on the worktree again retries exactly the steps that degraded and
+     * skips the ones that worked — and it is said with the slug rather than the
+     * key, because the slug is what that command takes.
+     *
+     * @param  array<string, Entry>  $entries
+     */
+    private function retry(array $entries): void
+    {
+        $degraded = array_filter($entries, fn (Entry $entry): bool => $entry->degraded !== [] && ! DeadEntries::isDead($entry));
+
+        if ($degraded === []) {
+            return;
+        }
+
+        $slugs = array_map(fn (Entry $entry): string => $entry->slug, array_values($degraded));
+
+        $this->output->line(count($slugs) === 1
+            ? $slugs[0]." has bootstrap steps that did not finish; 'worktree create ".$slugs[0]."' retries them"
+            : count($slugs).' worktrees have bootstrap steps that did not finish: '.implode(', ', $slugs)
+              ."; 'worktree create <slug>' retries them one at a time");
+    }
+
+    /**
      * The projects on this machine that nothing claims, on stderr.
      *
      * Scoped exactly as the table above it was, $repoSlug being null for the
-     * run that asked about the whole machine.
+     * run that asked about the whole machine, and answered from the scan the
+     * `STATUS` column was built from rather than from a second one.
      *
      * Silent when there is nothing to say, which includes the machine that
      * could not be asked: a warning is worth printing, a clean bill of health
      * inferred from an unanswered daemon is not.
      */
-    private function warn(Registry $registry, ?string $repoSlug): void
+    private function warn(Orphans $scan, ?string $repoSlug): void
     {
-        $orphans = Orphans::for($registry, $this->runner, $this->output)->under(Orphans::prefix($repoSlug));
+        $orphans = $scan->under(Orphans::prefix($repoSlug));
 
         if ($orphans === []) {
             return;
@@ -427,12 +471,25 @@ final readonly class ListCommand implements Command
     }
 
     /**
+     * The entries as one line of JSON, each carrying what the table's two
+     * derived columns say about it.
+     *
+     * A superset of what `create --json` and `path --json` publish, and the same
+     * object underneath: the fields go on the end, `status` as the token the
+     * column prints and `age_seconds` as the subtraction rather than the word
+     * for it — a script that asked for structure can render `4d` itself and
+     * cannot un-render it.
+     *
      * @param  array<string, Entry>  $entries
+     * @param  array<string, Presence>|null  $daemon
      */
-    private static function json(array $entries): string
+    private static function json(array $entries, ?array $daemon): string
     {
         $payload = json_encode(
-            array_values(array_map(fn (Entry $entry): array => $entry->toPayload(), $entries)),
+            array_values(array_map(fn (Entry $entry): array => $entry->toPayload() + [
+                'status' => Status::of($entry, $daemon)->value,
+                'age_seconds' => Age::seconds($entry->createdAt),
+            ], $entries)),
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
         );
 

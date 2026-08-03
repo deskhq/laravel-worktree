@@ -34,8 +34,8 @@ afterEach(function () {
 
 it('prints one tab-separated row per worktree on stdout, in slot order, and nothing else', function () {
     registryHolds([
-        'wt-desk-feat-search' => slotEntry(3, 'feat-search', branch: 'feat/search'),
-        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
+        'wt-desk-feat-search' => slotEntry(3, 'feat-search', branch: 'feat/search', createdAt: claimedAgo(3 * 86400)),
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', createdAt: claimedAgo(4 * 3600)),
     ]);
 
     $process = worktreeList();
@@ -45,9 +45,9 @@ it('prints one tab-separated row per worktree on stdout, in slot order, and noth
         // alignment `column -t` used to lay over this is a courtesy to a reader
         // who is not on the far side of a pipe.
         ->and(rowsOf($process))->toBe([
-            "KEY\tSLOT\tAPP\tVITE\tREVERB\tDB\tREDIS\tBRANCH\tPATH\tSTATUS",
-            "wt-desk-441-fix-login\t0\t20000\t20001\t20002\t20003\t20004\t441-fix-login\t".$this->root.'/desk-worktrees/441-fix-login'."\tok",
-            "wt-desk-feat-search\t3\t20030\t20031\t20032\t20033\t20034\tfeat/search\t".$this->root.'/desk-worktrees/feat-search'."\tok",
+            "KEY\tSLOT\tAPP\tVITE\tREVERB\tDB\tREDIS\tBRANCH\tPATH\tSTATUS\tAGE",
+            "wt-desk-441-fix-login\t0\t20000\t20001\t20002\t20003\t20004\t441-fix-login\t".$this->root.'/desk-worktrees/441-fix-login'."\tunbooted\t4h",
+            "wt-desk-feat-search\t3\t20030\t20031\t20032\t20033\t20034\tfeat/search\t".$this->root.'/desk-worktrees/feat-search'."\tunbooted\t3d",
         ])
         ->and($process->getErrorOutput())->toBe('');
 });
@@ -60,8 +60,8 @@ it('prints one tab-separated row per worktree on stdout, in slot order, and noth
  */
 it('hands awk the fields it promises, one per column', function () {
     registryHolds([
-        'wt-desk-feat-search' => slotEntry(3, 'feat-search'),
-        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
+        'wt-desk-feat-search' => slotEntry(3, 'feat-search', createdAt: claimedAgo(90)),
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', createdAt: claimedAgo(90)),
     ]);
 
     expect(fieldsFromAwk(worktreeList(), 2))->toBe(['SLOT', '0', '3'])
@@ -70,9 +70,10 @@ it('hands awk the fields it promises, one per column', function () {
             $this->root.'/desk-worktrees/441-fix-login',
             $this->root.'/desk-worktrees/feat-search',
         ])
-        // On the end, where a column added later does not move the ones a
-        // script is already reading by position.
-        ->and(fieldsFromAwk(worktreeList(), 10))->toBe(['STATUS', 'ok', 'ok']);
+        // On the end, in the order they were added, where a column added later
+        // does not move the ones a script is already reading by position.
+        ->and(fieldsFromAwk(worktreeList(), 10))->toBe(['STATUS', 'unbooted', 'unbooted'])
+        ->and(fieldsFromAwk(worktreeList(), 11))->toBe(['AGE', '1m', '1m']);
 });
 
 /**
@@ -90,7 +91,7 @@ it('keeps every field of a row far wider than a terminal', function () {
 
     expect($rows)->toHaveCount(2)
         ->and(strlen($rows[1]))->toBeGreaterThan(80)
-        ->and(explode("\t", $rows[1]))->toHaveCount(10)
+        ->and(explode("\t", $rows[1]))->toHaveCount(11)
         ->and(explode("\t", $rows[1])[8])->toBe($this->root.'/desk-worktrees/'.$slug);
 });
 
@@ -103,7 +104,7 @@ it('takes its port columns from the configuration rather than from a list of its
 
     registryHolds(['wt-desk-441-fix-login' => slotEntry(1, '441-fix-login', ports: ['app' => 20010, 'meilisearch' => 20011])]);
 
-    expect(columnsOf(worktreeList())[0])->toBe(['KEY', 'SLOT', 'APP', 'MEILISEARCH', 'BRANCH', 'PATH', 'STATUS']);
+    expect(columnsOf(worktreeList())[0])->toBe(['KEY', 'SLOT', 'APP', 'MEILISEARCH', 'BRANCH', 'PATH', 'STATUS', 'AGE']);
 });
 
 it('shows this repository by default and the whole machine when asked', function () {
@@ -127,13 +128,17 @@ it('says that nothing holds a slot rather than printing an empty table', functio
 });
 
 it('emits the registry entries as one line of JSON, empty registry included', function () {
-    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login')]);
+    $claimed = claimedAgo(7200);
+
+    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', createdAt: $claimed)]);
 
     $process = worktreeList(['--json']);
+    $listed = json_decode(trim($process->getOutput()), true, flags: JSON_THROW_ON_ERROR);
 
     expect($process)->toHaveSucceeded()
         ->and(substr_count($process->getOutput(), "\n"))->toBe(1)
-        ->and(json_decode(trim($process->getOutput()), true, flags: JSON_THROW_ON_ERROR))->toBe([[
+        ->and($listed)->toHaveCount(1)
+        ->and($listed[0])->toMatchArray([
             'project' => 'wt-desk-441-fix-login',
             'slot' => 0,
             'repo' => $this->main,
@@ -141,9 +146,23 @@ it('emits the registry entries as one line of JSON, empty registry included', fu
             'branch' => '441-fix-login',
             'path' => $this->root.'/desk-worktrees/441-fix-login',
             'ports' => ['app' => 20000, 'vite' => 20001, 'reverb' => 20002, 'db' => 20003, 'redis' => 20004],
-            'created_at' => '2026-01-01T00:00:00Z',
+            'created_at' => $claimed,
             'degraded' => [],
-        ]]);
+            // The token the table prints, as a field rather than a rendering.
+            'status' => 'unbooted',
+        ])
+        // The whole object, so a field added without being thought about is a
+        // failing test rather than a silent change to what `--json` publishes:
+        // everything `create --json` and `path --json` carry, and the two the
+        // table derives, on the end.
+        ->and(array_keys($listed[0]))->toBe([
+            'project', 'slot', 'repo', 'slug', 'branch', 'path', 'ports', 'created_at', 'degraded',
+            'status', 'age_seconds',
+        ])
+        // Seconds rather than `2h`: a script asked for the subtraction, and can
+        // render the word from it. Bounded rather than exact, because the run
+        // happens a moment after the timestamp was written.
+        ->and($listed[0]['age_seconds'])->toBeGreaterThanOrEqual(7200)->toBeLessThan(7260);
 
     registryHolds([]);
 
@@ -173,43 +192,143 @@ it('marks an entry whose worktree directory is gone, and names the sweep for it'
 
     expect($process)->toHaveSucceeded()
         ->and(columnsOf($process)[0])->toContain('STATUS')
-        ->and(statusesListed($process))->toBe(['ok', 'gone'])
+        // `gone` outranks what the daemon would have said, and is reached
+        // without asking it: a slot with no worktree behind it is the fact
+        // worth acting on, whatever containers it left on the machine.
+        ->and(statusesListed($process))->toBe(['unknown', 'gone'])
         ->and($process->getErrorOutput())
         ->toContain("wt-desk-feat-search holds a slot whose worktree directory is gone; 'worktree reap' reclaims it");
 });
 
-it('keeps the status column out of the terminal rendering while there is nothing to say', function () {
-    registryHolds([
-        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
-        'wt-desk-feat-search' => slotEntry(3, 'feat-search'),
+/**
+ * The rest of #53's column, which was `ok` for everything that was not `gone` —
+ * a word that said only *nothing to report*, and left the questions in front of
+ * somebody with five worktrees open ("which of these is up? which is idle
+ * eating nothing?") to `docker ps` and reading project names by eye (#54).
+ */
+it('says what each row has on the daemon behind it', function () {
+    $this->docker = fakeDockerBinary($this->root, projects: [
+        'wt-desk-441-fix-login' => ['containers' => 4],
+        'wt-desk-feat-search' => ['containers' => 4, 'running' => 1],
+        'wt-desk-feat-checkout' => ['containers' => 2, 'running' => 0],
+        // And a fourth with nothing on the daemon at all, declared only in the
+        // registry below.
     ]);
 
-    // A column of `ok` is width spent on nothing — the same rule that drops
-    // `BRANCH` when every key already ends with it.
-    expect(headerOf(worktreeListInTerminal()))->not->toContain('STATUS');
-
     registryHolds([
         'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
-        'wt-desk-feat-search' => slotEntry(3, 'feat-search'),
-    ], gone: ['wt-desk-feat-search']);
+        'wt-desk-feat-search' => slotEntry(1, 'feat-search'),
+        'wt-desk-feat-checkout' => slotEntry(2, 'feat-checkout'),
+        'wt-desk-chore-deps' => slotEntry(3, 'chore-deps'),
+    ]);
 
-    $process = worktreeListInTerminal();
+    expect(statusesListed(worktreeList()))->toBe(['running', 'partial', 'stopped', 'unbooted']);
+});
 
-    expect(headerOf($process))->toContain('STATUS')
-        ->and(rowsOf($process)[2])->toEndWith('ok')
-        ->and(rowsOf($process)[3])->toEndWith('gone');
+/**
+ * The interesting rows are the ones where the registry and the daemon disagree,
+ * and one of those is an entry that recorded a bootstrap step it never
+ * finished. It is a registry fact, so it survives a daemon nobody can reach,
+ * and it outranks whatever the containers are doing: what wants acting on there
+ * is the step, not the uptime.
+ */
+it('marks an entry whose bootstrap did not finish, and names the retry', function () {
+    $this->docker = fakeDockerBinary($this->root, projects: ['wt-desk-441-fix-login' => ['containers' => 3]]);
+
+    registryHolds([
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', degraded: ['Installing dependencies']),
+        'wt-desk-feat-search' => slotEntry(1, 'feat-search'),
+    ]);
+
+    $process = worktreeList();
+
+    expect($process)->toHaveSucceeded()
+        ->and(statusesListed($process))->toBe(['degraded', 'unbooted'])
+        ->and($process->getErrorOutput())
+        ->toContain("441-fix-login has bootstrap steps that did not finish; 'worktree create 441-fix-login' retries them");
 });
 
 /**
  * The piped rendering is a contract, and a field that comes and goes is not
- * one: `STATUS` is emitted whether or not any row has anything to report.
+ * one — and the fitted one no longer has the excuse it had while `STATUS` could
+ * only say `ok`: every token it prints now is something a person acts on.
  */
-it('always carries the status field into the piped rendering', function () {
-    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login')]);
+it('carries both derived columns into both renderings, whatever the rows say', function () {
+    $this->docker = fakeDockerBinary($this->root, projects: ['wt-desk-441-fix-login' => ['containers' => 2]]);
 
-    expect(columnsOf(worktreeList())[0])->toContain('STATUS')
-        ->and(statusesListed(worktreeList()))->toBe(['ok'])
-        ->and(worktreeList()->getErrorOutput())->not->toContain('reclaims');
+    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', createdAt: claimedAgo(5 * 86400))]);
+
+    expect(columnsOf(worktreeList())[0])->toContain('STATUS')->toContain('AGE')
+        ->and(statusesListed(worktreeList()))->toBe(['running'])
+        ->and(worktreeList()->getErrorOutput())->not->toContain('reclaims')
+        ->and(headerOf(worktreeListInTerminal()))->toContain('STATUS')->toContain('AGE')
+        ->and(rowsOf(worktreeListInTerminal())[2])->toEndWith('running  5d');
+});
+
+/**
+ * `created_at` has been on every entry since the registry existed and nothing
+ * ever showed it. One unit, the largest that has whole numbers of itself in the
+ * answer, and days all the way out — `152d` and "from March" are the same fact,
+ * and `mo` beside `m` in a column scanned rather than read is not.
+ */
+it('shows how long ago each slot was claimed', function (int $seconds, string $shown) {
+    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', createdAt: claimedAgo($seconds))]);
+
+    expect(agesListed(worktreeList()))->toBe([$shown]);
+})->with([
+    'minutes' => [45 * 60, '45m'],
+    'hours' => [5 * 3600, '5h'],
+    'days' => [152 * 86400, '152d'],
+]);
+
+it('measures a worktree made moments ago in seconds', function () {
+    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', createdAt: claimedAgo(5))]);
+
+    // How many of them is a race with the run's own startup, and not the point:
+    // the point is that the smallest unit is the second rather than a `0m` that
+    // reads as no answer.
+    expect(agesListed(worktreeList())[0])->toMatch('/\A\d{1,2}s\z/');
+});
+
+it('says nothing rather than guessing about an entry whose timestamp it cannot read', function () {
+    $entry = slotEntry(0, '441-fix-login');
+    $entry['created_at'] = 'whenever';
+
+    registryHolds(['wt-desk-441-fix-login' => $entry]);
+
+    // Not `0s`: an unreadable timestamp is not a worktree made a moment ago,
+    // and rendering it as one puts the newest-looking row in the table on the
+    // oldest entry in it.
+    expect(agesListed(worktreeList()))->toBe(['-']);
+});
+
+/**
+ * The data was in hand and being thrown away: `list` already queried the daemon
+ * for the orphan warning, over the same `wt-` projects the table is listing. Ten
+ * worktrees must not mean ten `docker` invocations.
+ */
+it('fills the whole column with the one query the orphan scan already made', function () {
+    $this->docker = fakeDockerBinary($this->root, projects: [
+        'wt-desk-441-fix-login' => ['containers' => 2],
+        'wt-desk-feat-search' => ['containers' => 2],
+        'wt-desk-chore-deps' => ['containers' => 2, 'volumes' => 1],
+    ]);
+
+    registryHolds([
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
+        'wt-desk-feat-search' => slotEntry(1, 'feat-search'),
+    ]);
+
+    $process = worktreeList();
+
+    $census = array_filter(dockerCalls(), fn (string $call): bool => str_starts_with($call, 'ps -a --filter'));
+
+    expect(statusesListed($process))->toBe(['running', 'running'])
+        // One census for two rows and the warning under them, and no per-row
+        // query at all.
+        ->and($census)->toHaveCount(1)
+        ->and(dockerCalls())->not->toContain('ps -aq --filter label=com.docker.compose.project=wt-desk-441-fix-login')
+        ->and($process->getErrorOutput())->toContain('wt-desk-chore-deps');
 });
 
 /**
@@ -276,12 +395,16 @@ it('lists what the registry holds with the Docker daemon stopped, and only loses
         'wt-desk-feat-checkout' => ['volumes' => 3],
     ]);
 
-    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login')]);
+    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', createdAt: claimedAgo(3 * 86400))]);
 
     $process = worktreeList();
 
     expect($process)->toHaveSucceeded()
         ->and(keysListed($process))->toBe(['wt-desk-441-fix-login'])
+        // The table is whole, and the column says it could not be asked rather
+        // than inferring a clean bill of health from silence.
+        ->and(statusesListed($process))->toBe(['unknown'])
+        ->and(agesListed($process))->toBe(['3d'])
         // Nothing could be asked, so nothing is claimed: an unreachable daemon
         // is not evidence that this machine is clean.
         ->and($process->getErrorOutput())->not->toContain('no worktree claims');
@@ -300,8 +423,8 @@ it('lists what the registry holds with the Docker daemon stopped, and only loses
 
 it('aligns the rows, names the worktrees root once, and shows paths under it', function () {
     registryHolds([
-        'wt-desk-feat-search' => slotEntry(3, 'feat-search'),
-        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
+        'wt-desk-feat-search' => slotEntry(3, 'feat-search', createdAt: claimedAgo(3 * 86400)),
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', createdAt: claimedAgo(4 * 3600)),
     ]);
 
     $process = worktreeListInTerminal();
@@ -309,9 +432,9 @@ it('aligns the rows, names the worktrees root once, and shows paths under it', f
     expect($process)->toHaveSucceeded()
         ->and(rowsOf($process))->toBe([
             'paths under '.$this->root.'/desk-worktrees',
-            'KEY                    SLOT  APP    VITE   REVERB  DB     REDIS  PATH',
-            'wt-desk-441-fix-login  0     20000  20001  20002   20003  20004  441-fix-login',
-            'wt-desk-feat-search    3     20030  20031  20032   20033  20034  feat-search',
+            'KEY                    SLOT  APP    VITE   REVERB  DB     REDIS  PATH           STATUS    AGE',
+            'wt-desk-441-fix-login  0     20000  20001  20002   20003  20004  441-fix-login  unbooted  4h',
+            'wt-desk-feat-search    3     20030  20031  20032   20033  20034  feat-search    unbooted  3d',
         ]);
 });
 
@@ -371,11 +494,14 @@ it('says which worktrees root it is measuring paths against even when there is o
  */
 it('names the deepest root every listed worktree is under, across repositories', function () {
     registryHolds([
-        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
-        'wt-shop-feat-checkout' => slotEntry(1, 'feat-checkout', repo: $this->shop),
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', createdAt: claimedAgo(3 * 86400)),
+        'wt-shop-feat-checkout' => slotEntry(1, 'feat-checkout', repo: $this->shop, createdAt: claimedAgo(3 * 86400)),
     ]);
 
-    $rows = rowsOf(worktreeListInTerminal(['--all']));
+    // Wide enough for both paths in full: what this case is about is which root
+    // they are measured against, and a window that elides them is the other
+    // rendering rule being exercised by accident.
+    $rows = rowsOf(worktreeListInTerminal(['--all'], columns: 120));
 
     expect($rows[0])->toBe('paths under '.$this->root)
         ->and($rows[2])->toContain('desk-worktrees/441-fix-login')
@@ -397,15 +523,17 @@ it('dims the header, and writes no escape sequence at all when anything says not
 it('keeps --json and the orphan warning exactly as they are, terminal or not', function () {
     $this->docker = fakeDockerBinary($this->root, projects: ['wt-desk-feat-checkout' => ['volumes' => 3]]);
 
-    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login')]);
+    $claimed = claimedAgo(3 * 86400);
+
+    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', createdAt: $claimed)]);
 
     $process = worktreeListInTerminal(['--json']);
 
     expect($process)->toHaveSucceeded()
         // Structure was asked for, so structure is what comes back — unfitted,
         // undimmed, and with the absolute path a script came here for.
-        ->and(json_decode(trim($process->getOutput()), true, flags: JSON_THROW_ON_ERROR))
-        ->toBe([[
+        ->and(json_decode(trim($process->getOutput()), true, flags: JSON_THROW_ON_ERROR)[0])
+        ->toMatchArray([
             'project' => 'wt-desk-441-fix-login',
             'slot' => 0,
             'repo' => $this->main,
@@ -413,9 +541,10 @@ it('keeps --json and the orphan warning exactly as they are, terminal or not', f
             'branch' => '441-fix-login',
             'path' => $this->root.'/desk-worktrees/441-fix-login',
             'ports' => ['app' => 20000, 'vite' => 20001, 'reverb' => 20002, 'db' => 20003, 'redis' => 20004],
-            'created_at' => '2026-01-01T00:00:00Z',
+            'created_at' => $claimed,
             'degraded' => [],
-        ]])
+            'status' => 'unbooted',
+        ])
         // Still stderr, still the same words, still nowhere near the rows.
         ->and($process->getErrorOutput())->toContain('1 project of desk still on this daemon that no worktree claims:')
         ->and(rowsOf(worktreeListInTerminal()))->toHaveCount(3);
@@ -515,10 +644,31 @@ function keysListed(Process $process): array
  */
 function statusesListed(Process $process): array
 {
+    return fieldsListed($process, 'STATUS');
+}
+
+/**
+ * @return list<string> The age of every row, likewise.
+ */
+function agesListed(Process $process): array
+{
+    return fieldsListed($process, 'AGE');
+}
+
+/**
+ * One named column of every row, found by its header rather than by its
+ * position — the position is what a script reads and what the tests about the
+ * contract assert on, and a case about what a column *says* should not fail
+ * because a column was added beside it.
+ *
+ * @return list<string>
+ */
+function fieldsListed(Process $process, string $header): array
+{
     $columns = columnsOf($process);
-    $status = array_search('STATUS', $columns[0], true);
+    $field = array_search($header, $columns[0], true);
 
-    expect($status)->not->toBeFalse('the table carried no STATUS column');
+    expect($field)->not->toBeFalse("the table carried no $header column");
 
-    return array_map(fn (array $row): string => $row[$status], array_slice($columns, 1));
+    return array_map(fn (array $row): string => $row[$field], array_slice($columns, 1));
 }
