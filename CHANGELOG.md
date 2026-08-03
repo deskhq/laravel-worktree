@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/deskhq/laravel-worktree/compare/v0.3.0...v0.4.0) (2026-08-03)
+
+
+### Features
+
+* add a read-only way to ask where a worktree is ([#64](https://github.com/deskhq/laravel-worktree/issues/64)) ([94b9cf9](https://github.com/deskhq/laravel-worktree/commit/94b9cf95bad947df116293fc5cc5e4d40febfcbd))
+* bound every step, and the boot, with a timeout it can be killed at ([#61](https://github.com/deskhq/laravel-worktree/issues/61)) ([c405c65](https://github.com/deskhq/laravel-worktree/commit/c405c651311ffcf9e7da537a82a83ab3c1d2b29a))
+* generate the config from the repository's own compose.yaml, instead of documenting how to derive it ([#69](https://github.com/deskhq/laravel-worktree/issues/69)) ([2590a7d](https://github.com/deskhq/laravel-worktree/commit/2590a7dc6a19574c9ab17eedbe0b8dc5aefa49f8))
+* mark and sweep the registry entries with nothing behind them ([#65](https://github.com/deskhq/laravel-worktree/issues/65)) ([5948c3c](https://github.com/deskhq/laravel-worktree/commit/5948c3cc0475dea3647a75ad175bfeab9e8c513f))
+* reclaim a machine without destroying anything ([#67](https://github.com/deskhq/laravel-worktree/issues/67)) ([67a0c7a](https://github.com/deskhq/laravel-worktree/commit/67a0c7a10306308da1f5edd571571ae0753ec7de))
+* record who holds a lock, and take one whose holder is gone ([#63](https://github.com/deskhq/laravel-worktree/issues/63)) ([b27dfb0](https://github.com/deskhq/laravel-worktree/commit/b27dfb00bf04e04a1818b6382b7edb4dc63cf274))
+* run every pre-flight this package has, without creating anything ([#68](https://github.com/deskhq/laravel-worktree/issues/68)) ([b5ee531](https://github.com/deskhq/laravel-worktree/commit/b5ee531edabdbeef2a4b11945bf9ac113f16f6a7))
+* say what each row of `list` is, and how long it has been there ([be9d95a](https://github.com/deskhq/laravel-worktree/commit/be9d95a8a42dd7d6a07a099ce03fc4cd232a6550))
+* say what each row of `list` is, and how long it has been there ([#66](https://github.com/deskhq/laravel-worktree/issues/66)) ([be9d95a](https://github.com/deskhq/laravel-worktree/commit/be9d95a8a42dd7d6a07a099ce03fc4cd232a6550))
+* stop typing slugs from memory, with a `wt` function and completion ([#70](https://github.com/deskhq/laravel-worktree/issues/70)) ([e7b1893](https://github.com/deskhq/laravel-worktree/commit/e7b18931015124c29b038d3ad796eacb72031129))
+
 ## [0.3.0](https://github.com/deskhq/laravel-worktree/compare/v0.2.0...v0.3.0) (2026-07-31)
 
 
