@@ -45,9 +45,9 @@ it('prints one tab-separated row per worktree on stdout, in slot order, and noth
         // alignment `column -t` used to lay over this is a courtesy to a reader
         // who is not on the far side of a pipe.
         ->and(rowsOf($process))->toBe([
-            "KEY\tSLOT\tAPP\tVITE\tREVERB\tDB\tREDIS\tBRANCH\tPATH",
-            "wt-desk-441-fix-login\t0\t20000\t20001\t20002\t20003\t20004\t441-fix-login\t".$this->root.'/desk-worktrees/441-fix-login',
-            "wt-desk-feat-search\t3\t20030\t20031\t20032\t20033\t20034\tfeat/search\t".$this->root.'/desk-worktrees/feat-search',
+            "KEY\tSLOT\tAPP\tVITE\tREVERB\tDB\tREDIS\tBRANCH\tPATH\tSTATUS",
+            "wt-desk-441-fix-login\t0\t20000\t20001\t20002\t20003\t20004\t441-fix-login\t".$this->root.'/desk-worktrees/441-fix-login'."\tok",
+            "wt-desk-feat-search\t3\t20030\t20031\t20032\t20033\t20034\tfeat/search\t".$this->root.'/desk-worktrees/feat-search'."\tok",
         ])
         ->and($process->getErrorOutput())->toBe('');
 });
@@ -69,7 +69,10 @@ it('hands awk the fields it promises, one per column', function () {
             'PATH',
             $this->root.'/desk-worktrees/441-fix-login',
             $this->root.'/desk-worktrees/feat-search',
-        ]);
+        ])
+        // On the end, where a column added later does not move the ones a
+        // script is already reading by position.
+        ->and(fieldsFromAwk(worktreeList(), 10))->toBe(['STATUS', 'ok', 'ok']);
 });
 
 /**
@@ -87,7 +90,7 @@ it('keeps every field of a row far wider than a terminal', function () {
 
     expect($rows)->toHaveCount(2)
         ->and(strlen($rows[1]))->toBeGreaterThan(80)
-        ->and(explode("\t", $rows[1]))->toHaveCount(9)
+        ->and(explode("\t", $rows[1]))->toHaveCount(10)
         ->and(explode("\t", $rows[1])[8])->toBe($this->root.'/desk-worktrees/'.$slug);
 });
 
@@ -100,7 +103,7 @@ it('takes its port columns from the configuration rather than from a list of its
 
     registryHolds(['wt-desk-441-fix-login' => slotEntry(1, '441-fix-login', ports: ['app' => 20010, 'meilisearch' => 20011])]);
 
-    expect(columnsOf(worktreeList())[0])->toBe(['KEY', 'SLOT', 'APP', 'MEILISEARCH', 'BRANCH', 'PATH']);
+    expect(columnsOf(worktreeList())[0])->toBe(['KEY', 'SLOT', 'APP', 'MEILISEARCH', 'BRANCH', 'PATH', 'STATUS']);
 });
 
 it('shows this repository by default and the whole machine when asked', function () {
@@ -147,6 +150,81 @@ it('emits the registry entries as one line of JSON, empty registry included', fu
     // A script that asked for JSON is parsing this, and an empty array is an
     // answer it can parse; the diagnostic still goes where diagnostics go.
     expect(trim(worktreeList(['--json'])->getOutput()))->toBe('[]');
+});
+
+/**
+ * The mirror image of the orphan warning, and the half nothing reported before
+ * (#53): a slot and a port block claimed by an entry whose directory somebody
+ * deleted. It rendered identically to a healthy row, which is what made "which
+ * of these fifty is real?" unanswerable.
+ */
+it('marks an entry whose worktree directory is gone, and names the sweep for it', function () {
+    // With no daemon anywhere: an entry and a directory is the whole of the
+    // test, which is what keeps this half of the answer available on a machine
+    // where the orphan warning cannot be produced at all.
+    $this->docker = fakeDockerBinary($this->root, daemon: false);
+
+    registryHolds([
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
+        'wt-desk-feat-search' => slotEntry(3, 'feat-search'),
+    ], gone: ['wt-desk-feat-search']);
+
+    $process = worktreeList();
+
+    expect($process)->toHaveSucceeded()
+        ->and(columnsOf($process)[0])->toContain('STATUS')
+        ->and(statusesListed($process))->toBe(['ok', 'gone'])
+        ->and($process->getErrorOutput())
+        ->toContain("wt-desk-feat-search holds a slot whose worktree directory is gone; 'worktree reap' reclaims it");
+});
+
+it('keeps the status column out of the terminal rendering while there is nothing to say', function () {
+    registryHolds([
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
+        'wt-desk-feat-search' => slotEntry(3, 'feat-search'),
+    ]);
+
+    // A column of `ok` is width spent on nothing — the same rule that drops
+    // `BRANCH` when every key already ends with it.
+    expect(headerOf(worktreeListInTerminal()))->not->toContain('STATUS');
+
+    registryHolds([
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
+        'wt-desk-feat-search' => slotEntry(3, 'feat-search'),
+    ], gone: ['wt-desk-feat-search']);
+
+    $process = worktreeListInTerminal();
+
+    expect(headerOf($process))->toContain('STATUS')
+        ->and(rowsOf($process)[2])->toEndWith('ok')
+        ->and(rowsOf($process)[3])->toEndWith('gone');
+});
+
+/**
+ * The piped rendering is a contract, and a field that comes and goes is not
+ * one: `STATUS` is emitted whether or not any row has anything to report.
+ */
+it('always carries the status field into the piped rendering', function () {
+    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login')]);
+
+    expect(columnsOf(worktreeList())[0])->toContain('STATUS')
+        ->and(statusesListed(worktreeList()))->toBe(['ok'])
+        ->and(worktreeList()->getErrorOutput())->not->toContain('reclaims');
+});
+
+/**
+ * `--all` is what reaches an entry another checkout holds, so the remedy it
+ * names has to be the run that would actually find it.
+ */
+it('points at the sweep that can reach the entry it marked', function () {
+    registryHolds([
+        'wt-desk-441-fix-login' => slotEntry(0, '441-fix-login'),
+        'wt-shop-feat-checkout' => slotEntry(1, 'feat-checkout', repo: $this->shop),
+    ], gone: ['wt-shop-feat-checkout']);
+
+    expect(worktreeList()->getErrorOutput())->not->toContain('reclaims')
+        ->and(worktreeList(['--all'])->getErrorOutput())
+        ->toContain("wt-shop-feat-checkout holds a slot whose worktree directory is gone; 'worktree reap --all' reclaims it");
 });
 
 it('warns about orphaned projects on stderr, keeping stdout to the rows', function () {
@@ -430,4 +508,17 @@ function columnsOf(Process $process): array
 function keysListed(Process $process): array
 {
     return array_map(fn (array $columns): string => $columns[0], array_slice(columnsOf($process), 1));
+}
+
+/**
+ * @return list<string> The status of every row, in the order the table gave them.
+ */
+function statusesListed(Process $process): array
+{
+    $columns = columnsOf($process);
+    $status = array_search('STATUS', $columns[0], true);
+
+    expect($status)->not->toBeFalse('the table carried no STATUS column');
+
+    return array_map(fn (array $row): string => $row[$status], array_slice($columns, 1));
 }

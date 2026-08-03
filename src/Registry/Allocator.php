@@ -81,7 +81,7 @@ final readonly class Allocator
                 return $entry;
             }
 
-            $slot = $this->freeSlot();
+            $slot = $this->freeSlot($repo);
 
             $entry = new Entry(
                 $key,
@@ -138,7 +138,7 @@ final readonly class Allocator
      * Called under the registry lock — the search and the claim that follows it
      * are one step, or two runs both see slot 3 free.
      */
-    private function freeSlot(): int
+    private function freeSlot(string $repo): int
     {
         $claimed = $this->registry->claimedSlots();
         $skipped = [];
@@ -163,9 +163,42 @@ final readonly class Allocator
         }
 
         throw new WorktreeException($skipped === []
-            ? "all $this->slots worktree slots are in use; free one with 'worktree remove <slug>', or raise 'slots'"
+            ? $this->exhausted($repo)
             : 'no free slot has a free port block ('.count($skipped).' of '.$this->slots.' slots skipped by the bind probe); '
               .'stop whatever is holding those ports, or move port_base');
+    }
+
+    /**
+     * Every slot claimed, and what to do about it.
+     *
+     * *Free one, or raise `slots`* is unactionable advice when the slots are
+     * held by entries whose directories, branches and repositories are all gone:
+     * the honest reading of it is "raise `slots`", which grows the leak instead
+     * of fixing it (#53). So the entries with nothing behind them are counted
+     * here — the registry has just been read for the search above — and the
+     * sweep that reclaims them is named.
+     *
+     * `--all` unless *every* one of them is reclaimable from this checkout: the
+     * count is machine-wide, because slots are, and a message that counts three
+     * and then names a run that would reclaim two sends somebody back to an
+     * exhausted registry having done what it said.
+     */
+    private function exhausted(string $repo): string
+    {
+        $dead = DeadEntries::for($this->registry)->of(null);
+
+        if ($dead === []) {
+            return "all $this->slots worktree slots are in use; free one with 'worktree remove <slug>', or raise 'slots'";
+        }
+
+        $here = array_filter($dead, fn (DeadEntry $entry): bool => $entry->isReclaimableFrom($repo));
+        $one = count($dead) === 1;
+
+        return "all $this->slots worktree slots are in use, and ".count($dead).' of them '
+            .($one ? 'is held by a registry entry whose' : 'are held by registry entries whose')
+            .' worktree directory is gone; '
+            ."'worktree reap".(count($here) === count($dead) ? '' : ' --all')."' reclaims ".($one ? 'it' : 'them')
+            .", or free one with 'worktree remove <slug>'";
     }
 
     /**

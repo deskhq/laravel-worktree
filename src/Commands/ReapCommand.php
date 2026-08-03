@@ -14,7 +14,7 @@ class ReapCommand extends WorktreeCommand
         {--yes : Skip the confirmation, for a run with nobody watching it}';
 
     /** @var string */
-    protected $description = 'Remove stray worktree projects left on this machine — runs on the host';
+    protected $description = 'Remove stray worktree projects, and reclaim the slots nothing is behind — runs on the host';
 
     protected function hostCommand(): string
     {

@@ -94,12 +94,67 @@ it('skips a slot whose ports are already bound, and says which port', function (
 
 it('refuses when every slot is claimed, and says how to free one', function () {
     $allocator = allocatorIn($this->home, $this->base, $this->diagnostics, slots: 2);
+    $worktrees = temporaryDirectory('worktree-live');
 
-    claim($allocator, 'wt-desk-441');
-    claim($allocator, 'wt-desk-512');
+    mkdir($worktrees.'/441');
+    mkdir($worktrees.'/512');
+
+    claim($allocator, 'wt-desk-441', path: $worktrees.'/441');
+    claim($allocator, 'wt-desk-512', path: $worktrees.'/512');
 
     expect(fn () => claim($allocator, 'wt-desk-604'))
-        ->toThrow(WorktreeException::class, 'all 2 worktree slots are in use');
+        ->toThrow(WorktreeException::class, "all 2 worktree slots are in use; free one with 'worktree remove <slug>', or raise 'slots'");
+
+    deleteDirectory($worktrees);
+});
+
+/**
+ * *Free one, or raise `slots`* is unactionable when the slots are held by
+ * entries whose directories are gone — the honest reading of it is "raise
+ * `slots`", which grows the leak instead of fixing it (#53). So the sweep is
+ * named, and named as the run that would actually reach them: a scoped `reap`
+ * finds nothing when the entry belongs to another checkout that still exists.
+ */
+it('points at the sweep when the slots are held by entries with nothing behind them', function () {
+    $allocator = allocatorIn($this->home, $this->base, $this->diagnostics, slots: 1);
+
+    claim($allocator, 'wt-desk-441');
+
+    expect(fn () => claim($allocator, 'wt-desk-604'))
+        ->toThrow(WorktreeException::class, 'all 1 worktree slots are in use, and 1 of them is held by a registry entry '
+            ."whose worktree directory is gone; 'worktree reap' reclaims it, or free one with 'worktree remove <slug>'");
+
+    $elsewhere = temporaryDirectory('worktree-checkout');
+
+    $allocator->release('wt-desk-441');
+    claim($allocator, 'wt-shop-441', repo: $elsewhere);
+
+    expect(fn () => claim($allocator, 'wt-desk-604'))
+        ->toThrow(WorktreeException::class, "'worktree reap --all' reclaims it");
+
+    deleteDirectory($elsewhere);
+});
+
+/**
+ * The count is machine-wide, because slots are. So a message that counts three
+ * and then names a run that would reclaim two sends somebody back to an
+ * exhausted registry having done exactly what they were told: `--all` unless
+ * *every* one of them is this checkout's to reclaim.
+ */
+it('names the machine-wide sweep when only some of the dead slots are this checkout\'s', function () {
+    $home = temporaryDirectory('worktree-home');
+    $elsewhere = temporaryDirectory('worktree-checkout');
+    $allocator = allocatorIn($home, $this->base, $this->diagnostics, slots: 2);
+
+    claim($allocator, 'wt-desk-441');
+    claim($allocator, 'wt-shop-512', repo: $elsewhere);
+
+    expect(fn () => claim($allocator, 'wt-desk-604'))
+        ->toThrow(WorktreeException::class, 'all 2 worktree slots are in use, and 2 of them are held by registry entries '
+            ."whose worktree directory is gone; 'worktree reap --all' reclaims them");
+
+    deleteDirectory($elsewhere);
+    deleteDirectory($home);
 });
 
 it('refuses when every free slot has a port the machine is already using', function () {
@@ -190,9 +245,12 @@ function allocatorIn(string $home, int $base, $diagnostics, int $slots = 50): Al
     );
 }
 
-function claim(Allocator $allocator, string $key, string $repo = '/checkouts/desk'): Entry
+/**
+ * @param  string|null  $path  Where the worktree is, for a case about an entry whose directory is really there.
+ */
+function claim(Allocator $allocator, string $key, string $repo = '/checkouts/desk', ?string $path = null): Entry
 {
-    return $allocator->allocate($key, $repo, '441', '441-fix-login', $repo.'-worktrees/441-fix-login');
+    return $allocator->allocate($key, $repo, '441', '441-fix-login', $path ?? $repo.'-worktrees/441-fix-login');
 }
 
 /**
