@@ -130,7 +130,7 @@ final readonly class CreateCommand implements Command
 
         // Building the runtime asks nothing of Docker; only boot() and the
         // `sail:` steps do, which is what keeps a ready re-entry free of it.
-        $runtime = SailRuntime::for($this->output, $this->runner);
+        $runtime = SailRuntime::for($this->output, $this->runner, $config->bootTimeout);
 
         if ($entry !== null && ! $invocation->has(self::Refresh) && $this->readiness()->isReady($identity->path)) {
             $outcome = $this->reenter($identity, $entry, $config, $anchor, $runtime);

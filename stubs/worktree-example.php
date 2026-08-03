@@ -228,11 +228,19 @@ return [
         // returned a 403 is what made the-desk#1005 painful. The worktree still
         // reaches ready; only tests/Browser is unavailable, and re-entering
         // retries this step and only this step.
+        //
+        // The tighter timeout is for the other half of that: a mirror that
+        // returns a 403 fails in seconds, and one that accepts the connection
+        // and then stalls would otherwise hold the whole bootstrap — and this
+        // worktree's lock — for the half hour step_timeout allows. Five minutes
+        // is generous for three browser downloads, and a timeout here degrades
+        // exactly as a 403 does.
         [
             'label' => 'Installing the Playwright browsers',
             'host' => 'bin/worktree-playwright {{path}}',
             'allow_failure' => true,
             'degrade' => 'Playwright is not fully installed; tests/Browser will not run in this worktree',
+            'timeout' => 300,
         ],
 
         // The Browser suite points the broadcaster at a live reverb

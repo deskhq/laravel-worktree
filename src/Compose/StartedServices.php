@@ -50,7 +50,7 @@ final readonly class StartedServices
      * Every service the worktree starts, keyed by name, valued by why.
      *
      * @param  array{keep_services: list<string>, port_overrides: array<string, list<string>>}  $compose  `compose`, as configured.
-     * @param  list<array<string, string|bool>>  $steps  `steps`, as {@see Schema} normalised them.
+     * @param  list<array<string, string|bool|int|null>>  $steps  `steps`, as {@see Schema} normalised them.
      * @return array<string, string>
      */
     public static function of(Services $services, string $appService, array $compose, array $steps): array
@@ -127,7 +127,7 @@ final readonly class StartedServices
     /**
      * The services one bootstrap step brings up by hand.
      *
-     * @param  array<string, string|bool>  $step
+     * @param  array<string, string|bool|int|null>  $step
      * @return list<array{0: string, 1: string, 2: bool}>
      */
     private static function startedBy(Services $services, array $step): array

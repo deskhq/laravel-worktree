@@ -28,6 +28,8 @@ final readonly class Step
         public bool $allowFailure,
         /** Re-printed at the very end when this step failed. */
         public ?string $degrade,
+        /** How long it may run for, in seconds; null is no ceiling. */
+        public ?int $timeout,
     ) {}
 
     /**
@@ -38,7 +40,7 @@ final readonly class Step
      * not reach are both worth having, and a rule with exceptions in it is a
      * rule people have to look up.
      *
-     * @param  array<string, string|bool>  $step  One step, as Schema normalised it.
+     * @param  array<string, string|bool|int|null>  $step  One step, as Schema normalised it — `timeout` included, defaulted or declared.
      * @param  string  $where  Its config path — `steps.3` — for any error.
      *
      * @throws WorktreeException when the step names a placeholder this worktree does not have.
@@ -53,6 +55,7 @@ final readonly class Step
 
         [$action, $command] = self::action($values, $where);
         $when = $values['when'] ?? null;
+        $timeout = $values['timeout'] ?? null;
 
         return new self(
             $action,
@@ -62,6 +65,7 @@ final readonly class Step
             is_string($when) ? Condition::parse($when, $where) : null,
             ($values['allow_failure'] ?? false) === true,
             self::text($values, 'degrade'),
+            is_int($timeout) ? $timeout : null,
         );
     }
 
@@ -99,7 +103,7 @@ final readonly class Step
     }
 
     /**
-     * @param  array<string, string|bool>  $values
+     * @param  array<string, string|bool|int|null>  $values
      * @return array{0: Action, 1: string}
      */
     private static function action(array $values, string $where): array
@@ -118,7 +122,7 @@ final readonly class Step
     }
 
     /**
-     * @param  array<string, string|bool>  $values
+     * @param  array<string, string|bool|int|null>  $values
      */
     private static function text(array $values, string $key): ?string
     {

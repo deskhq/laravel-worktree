@@ -48,10 +48,16 @@ final readonly class Configuration
          * @var array{keep_services: list<string>, port_overrides: array<string, list<string>>}
          */
         public array $compose,
+        /** How long the runtime's `boot()` may take, in seconds; null is no ceiling. */
+        public ?int $bootTimeout,
         /**
          * The bootstrap recipe, in the order it runs.
          *
-         * @var list<array<string, string|bool>>
+         * Every step carries the `timeout` it will be run under, whether it
+         * declared one or was given `step_timeout`; there is no separate
+         * default to consult here, because the recipe already has it.
+         *
+         * @var list<array<string, string|bool|int|null>>
          */
         public array $steps,
         /** Where the machine-global registry and locks live. */
@@ -92,6 +98,7 @@ final readonly class Configuration
             $settings['repo_slug'],
             $settings['env'],
             $settings['compose'],
+            $settings['boot_timeout'],
             $settings['steps'],
             self::home(),
         );

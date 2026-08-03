@@ -5,6 +5,7 @@ namespace DeskHQ\LaravelWorktree\Bootstrap;
 use DeskHQ\LaravelWorktree\Config\Placeholders;
 use DeskHQ\LaravelWorktree\Config\Schema;
 use DeskHQ\LaravelWorktree\Console\Output;
+use DeskHQ\LaravelWorktree\Exceptions\TimedOutException;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Excludes;
 use DeskHQ\LaravelWorktree\Naming\Identity;
@@ -20,9 +21,9 @@ use DeskHQ\LaravelWorktree\Process\ProcessRunner;
  *
  * ## Where the DSL stops
  *
- * `host` / `sail` / `sail_root`, plus `sentinel`, `when`, `allow_failure` and
- * `degrade`. That covers ten of the twelve steps the bash original ran. The
- * other two are left out on purpose:
+ * `host` / `sail` / `sail_root`, plus `sentinel`, `when`, `allow_failure`,
+ * `degrade` and `timeout`. That covers ten of the twelve steps the bash
+ * original ran. The other two are left out on purpose:
  *
  * - **Finally-semantics.** The original brackets an apt install with parking
  *   and restoring the container's third-party sources, and the restore has to
@@ -49,6 +50,22 @@ use DeskHQ\LaravelWorktree\Process\ProcessRunner;
  * Placeholders are resolved for the whole recipe before the first step starts,
  * so a typo in step twelve is an error now rather than after eleven minutes of
  * Composer, npm and image pulls.
+ *
+ * ## A step that never returns is a step that failed
+ *
+ * Every step carries a `timeout` — its own, or the package's `step_timeout`
+ * default — and one that runs past it is killed and reported like any other
+ * failure. That composition is the whole design: `allow_failure` and `degrade`
+ * mean for a timeout exactly what they mean for a non-zero exit, and a timed
+ * out step without `allow_failure` stops the bootstrap where it stands and
+ * leaves the worktree resumable.
+ *
+ * It matters more here than the ordinary hang argument suggests, because the
+ * per-worktree lock is held for the whole run: an `npm ci` against a registry
+ * that accepts the connection and then stalls does not just hang its own run,
+ * it blocks every later entry into that worktree behind it — and an agent
+ * shelling out to `worktree create` has nothing to tell a wedged step from a
+ * slow one.
  */
 final readonly class Pipeline
 {
@@ -72,7 +89,7 @@ final readonly class Pipeline
      * Run the recipe against the worktree at $identity->path.
      *
      * @param  array<string, int>  $ports  The host ports its slot owns.
-     * @param  list<array<string, string|bool>>  $steps  `steps`, as configured.
+     * @param  list<array<string, string|bool|int|null>>  $steps  `steps`, as configured.
      * @param  string  $environmentFile  The worktree's `.env`, which `env_empty` reads.
      * @param  list<string>|null  $only  Retry just the steps recorded under these names; null runs the whole recipe.
      *
@@ -105,9 +122,9 @@ final readonly class Pipeline
 
             $this->output->line($position.$step->name());
 
-            $exitCode = $this->shell->run($step->commandLine(), $identity->path);
+            $failure = $this->attempt($step, $identity->path);
 
-            if ($exitCode === 0) {
+            if ($failure === null) {
                 $this->markDone($step, $identity->path);
 
                 continue;
@@ -115,12 +132,12 @@ final readonly class Pipeline
 
             if (! $step->allowFailure) {
                 throw new WorktreeException(
-                    $step->name()." failed (exit $exitCode); the bootstrap stopped there — fix it, then "
+                    $step->name()." $failure; the bootstrap stopped there — fix it, then "
                     ."'worktree create $identity->name' picks up where it left off"
                 );
             }
 
-            $this->output->line("warning: {$step->name()} failed (exit $exitCode), and this step is allowed to");
+            $this->output->line("warning: {$step->name()} $failure, and this step is allowed to fail");
 
             $degraded[] = ['name' => $step->name(), 'notice' => $step->degrade];
         }
@@ -129,10 +146,31 @@ final readonly class Pipeline
     }
 
     /**
+     * Run one step, and say how it went wrong — or null when it did not.
+     *
+     * Two ways to fail, one sentence each, and they are deliberately different
+     * sentences: `failed (exit 137)` on a step whose container was killed and
+     * `timed out after 900s` on a step that never returned are the same
+     * *outcome* and completely different problems, and a run that reported the
+     * second as the first would send somebody looking through a log that
+     * stops mid-sentence for an exit code nothing produced.
+     */
+    private function attempt(Step $step, string $path): ?string
+    {
+        try {
+            $exitCode = $this->shell->run($step->commandLine(), $path, $step->timeout);
+        } catch (TimedOutException $timedOut) {
+            return "timed out after {$timedOut->seconds}s";
+        }
+
+        return $exitCode === 0 ? null : "failed (exit $exitCode)";
+    }
+
+    /**
      * The steps this run will consider, resolved, and narrowed to a retry list.
      *
      * @param  array<string, int>  $ports
-     * @param  list<array<string, string|bool>>  $steps
+     * @param  list<array<string, string|bool|int|null>>  $steps
      * @param  list<string>|null  $only
      * @return list<Step>
      */

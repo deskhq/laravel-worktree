@@ -205,6 +205,56 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Timeouts
+    |--------------------------------------------------------------------------
+    |
+    | How long anything a run starts may take before it is killed and reported
+    | as a failure. Both are in seconds, and either may be null for no ceiling
+    | at all.
+    |
+    |     'step_timeout' => 1800,   // 30 minutes, per bootstrap step
+    |     'boot_timeout' => 3600,   // 60 minutes, for the runtime's own boot
+    |
+    | ## Why there is a default at all
+    |
+    | Nothing here used to have one, because Symfony's default of 60s is plainly
+    | wrong for `composer install` — but the alternative that was chosen,
+    | disabling it entirely, is wrong in a way that is harder to see. `npm ci`
+    | against a registry that accepts the connection and then stalls, or a
+    | Docker daemon that is wedged rather than down — a stopped daemon fails
+    | fast, a hung one does not — hangs forever, and the per-worktree lock is
+    | held for the whole run: every later entry into that worktree queues behind
+    | it. An unbounded hang is the one failure this package cannot describe.
+    |
+    | So the default is a number rather than null. null would preserve that
+    | behaviour and help only the people who went looking for this key, which is
+    | a poor answer from a package whose position is that consumers should not
+    | have to configure their way out of a trap. Thirty minutes is far above any
+    | legitimate step — a cold `composer install` and a first `npm ci` are
+    | minutes — and far below forever.
+    |
+    | ## Why boot has its own
+    |
+    | `boot_timeout` covers what the package does before the first step runs:
+    | resolving a `vendor/` through a throwaway Composer container, then `sail
+    | up -d`, which on a first run pulls and builds images. That is the package's
+    | own call rather than the application's, and it is slower than anything a
+    | recipe does, so it gets its own and more generous ceiling instead of
+    | borrowing the step default.
+    |
+    | Teardown is deliberately not bounded: `remove` and `reap` are what somebody
+    | reaches for when a worktree is already in a bad state, and a teardown cut
+    | short leaves containers and volumes on the disk with nothing left to name
+    | them.
+    |
+    */
+
+    'step_timeout' => 1800,
+
+    'boot_timeout' => 3600,
+
+    /*
+    |--------------------------------------------------------------------------
     | Bootstrap steps
     |--------------------------------------------------------------------------
     |
@@ -217,6 +267,7 @@ return [
     |     'when'          => missing:<path> | exists:<path> | env_empty:<KEY>
     |     'allow_failure' => a failure does not abort the bootstrap
     |     'degrade'       => re-printed at the very end when this step failed
+    |     'timeout'       => seconds this step may run for; null for no ceiling
     |
     | Every string takes the {{path}}, {{slug}}, {{project}}, {{branch}},
     | {{uid}}, {{gid}} and {{port.*}} placeholders, and the whole recipe is
@@ -240,6 +291,25 @@ return [
     | A `sentinel` says "done once, never again"; a `when` says "needed right
     | now". `npm ci` wants the second: it is worth running again whenever
     | node_modules has been thrown away.
+    |
+    | ## A step that never returns is a step that failed
+    |
+    | Every step runs under `step_timeout` above unless it names a `timeout` of
+    | its own, and one that runs past it is killed and reported like any other
+    | failure — by name, with the limit it exceeded, and distinctly from a
+    | non-zero exit. From there nothing is special about it: `allow_failure` and
+    | `degrade` mean what they always mean, and a timed-out step without
+    | `allow_failure` stops the bootstrap where it stands and leaves the worktree
+    | resumable.
+    |
+    |     ['label'   => 'Installing node modules',
+    |      'host'    => 'npm ci',
+    |      'when'    => 'missing:node_modules',
+    |      'timeout' => 900],
+    |
+    |     ['label'   => 'Restoring the production snapshot',
+    |      'sail'    => 'artisan db:restore',
+    |      'timeout' => null],   // this one really can take all afternoon
     |
     | ## Seeding is a branch, not a skip
     |

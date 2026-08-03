@@ -4,6 +4,7 @@ namespace DeskHQ\LaravelWorktree\Runtime;
 
 use DeskHQ\LaravelWorktree\Config\Env;
 use DeskHQ\LaravelWorktree\Console\Output;
+use DeskHQ\LaravelWorktree\Exceptions\TimedOutException;
 use DeskHQ\LaravelWorktree\Process\ProcessResult;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
 use DeskHQ\LaravelWorktree\Support\HostUser;
@@ -187,10 +188,13 @@ final class Docker
      * diagnostics — it is minutes of work, and silence would read as a hang.
      *
      * @param  list<string>  $arguments
+     * @param  int|null  $timeout  Seconds it may run for; null is no ceiling.
+     *
+     * @throws TimedOutException when it ran past $timeout.
      */
-    public function run(array $arguments, ?string $cwd = null): int
+    public function run(array $arguments, ?string $cwd = null, ?int $timeout = null): int
     {
-        return $this->runner->run([$this->binary, ...$arguments], $cwd);
+        return $this->runner->run([$this->binary, ...$arguments], $cwd, timeout: $timeout);
     }
 
     /**

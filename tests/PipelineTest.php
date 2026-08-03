@@ -4,7 +4,9 @@ use DeskHQ\LaravelWorktree\Bootstrap\Outcome;
 use DeskHQ\LaravelWorktree\Bootstrap\Pipeline;
 use DeskHQ\LaravelWorktree\Bootstrap\ProcessShell;
 use DeskHQ\LaravelWorktree\Bootstrap\Shell;
+use DeskHQ\LaravelWorktree\Config\Schema;
 use DeskHQ\LaravelWorktree\Console\Output;
+use DeskHQ\LaravelWorktree\Exceptions\TimedOutException;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Excludes;
 use DeskHQ\LaravelWorktree\Naming\Identity;
@@ -19,17 +21,25 @@ use DeskHQ\LaravelWorktree\Process\ProcessRunner;
  */
 final class RecordingShell implements Shell
 {
-    /** @var list<array{0: string, 1: string}> */
+    /** @var list<array{0: string, 1: string, 2: int|null}> */
     public array $ran = [];
 
     /**
      * @param  array<string, int>  $exitCodes  Command line => the exit code to answer with; anything unnamed succeeds.
+     * @param  list<string>  $hangs  Command lines that run past their limit, as a real one would — see {@see ProcessRunner}.
      */
-    public function __construct(private readonly array $exitCodes = []) {}
+    public function __construct(
+        private readonly array $exitCodes = [],
+        private readonly array $hangs = [],
+    ) {}
 
-    public function run(string $commandLine, string $path): int
+    public function run(string $commandLine, string $path, ?int $timeout): int
     {
-        $this->ran[] = [$commandLine, $path];
+        $this->ran[] = [$commandLine, $path, $timeout];
+
+        if (in_array($commandLine, $this->hangs, true)) {
+            throw new TimedOutException($timeout ?? 0, $commandLine);
+        }
 
         return $this->exitCodes[$commandLine] ?? 0;
     }
@@ -38,6 +48,12 @@ final class RecordingShell implements Shell
     public function commandLines(): array
     {
         return array_map(fn (array $call): string => $call[0], $this->ran);
+    }
+
+    /** @return list<int|null> */
+    public function timeouts(): array
+    {
+        return array_map(fn (array $call): ?int => $call[2], $this->ran);
     }
 }
 
@@ -88,6 +104,53 @@ it('stops at a step that failed, and runs none of the ones after it', function (
     // And it says how to pick the bootstrap back up, by the name that was typed.
     expect(fn () => runPipeline(new RecordingShell(['true' => 1]), [['host' => 'true']]))
         ->toThrow(WorktreeException::class, "'worktree create 441' picks up where it left off");
+});
+
+it('runs every step under a limit, its own where it has one', function () {
+    $shell = new RecordingShell;
+
+    runPipeline($shell, [
+        ['host' => 'npm ci'],
+        ['host' => 'bin/worktree-playwright', 'timeout' => 300],
+        // The one way to ask for what every step used to get.
+        ['host' => 'bin/restore-the-snapshot', 'timeout' => null],
+    ]);
+
+    expect($shell->timeouts())->toBe([Schema::DefaultStepTimeout, 300, null]);
+});
+
+it('stops at a step that ran past its limit, and says which limit that was', function () {
+    $shell = new RecordingShell(hangs: ['npm ci']);
+
+    expect(fn () => runPipeline($shell, [
+        ['label' => 'Installing node modules', 'host' => 'npm ci', 'timeout' => 900],
+        ['host' => 'npm run build'],
+    ]))
+        // Named, with its limit, and distinct from a non-zero exit: a step that
+        // never returned and a step that returned 137 are the same outcome and
+        // a different problem.
+        ->toThrow(WorktreeException::class, 'Installing node modules timed out after 900s')
+        ->and(fn () => runPipeline($shell, [['host' => 'npm ci', 'timeout' => 900]]))
+        ->toThrow(WorktreeException::class, "'worktree create 441' picks up where it left off")
+        ->and($shell->commandLines())->toBe(['npm ci', 'npm ci']);
+});
+
+it('degrades a step that ran past its limit exactly as it degrades one that failed', function () {
+    $shell = new RecordingShell(hangs: ['bin/worktree-playwright '.$this->path]);
+
+    $outcome = runPipeline($shell, [
+        ['label' => 'Browsers', 'host' => 'bin/worktree-playwright {{path}}', 'timeout' => 300,
+            'allow_failure' => true, 'degrade' => 'Playwright is not fully installed'],
+        ['label' => 'Building assets', 'host' => 'npm run build'],
+    ]);
+
+    $outcome->announce(new Output($this->diagnostics));
+
+    expect($outcome->names())->toBe(['Browsers'])
+        ->and($shell->commandLines())->toHaveCount(2)
+        ->and(diagnosticsIn($this->diagnostics))
+        ->toContain('warning: Browsers timed out after 300s, and this step is allowed to fail')
+        ->toContain('Playwright is not fully installed');
 });
 
 it('skips a sentinel-guarded step, and touches the sentinel only when it worked', function () {
@@ -261,6 +324,36 @@ it('runs a host step on the host, with the worktree as its working directory', f
         ->and(trim((string) file_get_contents($this->path.'/where.txt')))->toBe($this->path);
 });
 
+/**
+ * The other case that starts a real subprocess, and the reason the limit is
+ * worth having at all: a step that would not have come back.
+ *
+ * No Docker anywhere in it — a `sleep` is every hung `npm ci` this is for, and
+ * the assertion is not that the run gave up but that the work stopped. The
+ * touch after the sleep is what a process that outlived its kill would still
+ * get to do.
+ */
+it('kills a host step that ran past its limit, and nothing it was doing outlives it', function () {
+    $output = new Output($this->diagnostics);
+    $runner = new ProcessRunner($output);
+    $pipeline = new Pipeline($output, new ProcessShell($runner), new Excludes($runner, $output));
+
+    $started = microtime(true);
+
+    expect(fn () => $pipeline->run($this->identity, slotPorts(), [
+        ['label' => 'Sleeping', 'host' => 'sleep 3 && touch survived.txt', 'timeout' => 1],
+    ], $this->path.'/.env'))
+        ->toThrow(WorktreeException::class, 'Sleeping timed out after 1s; the bootstrap stopped there')
+        // Killed at its limit rather than waited out.
+        ->and(microtime(true) - $started)->toBeLessThan(3.0);
+
+    // Past the moment the step would have reached its second command, had
+    // anything of it still been running to reach it.
+    usleep((int) max(0, 4_000_000 - (microtime(true) - $started) * 1_000_000));
+
+    expect($this->path.'/survived.txt')->not->toBeFile();
+});
+
 it('lets a failing host step decide the run, exit code and all', function () {
     $output = new Output($this->diagnostics);
     $runner = new ProcessRunner($output);
@@ -274,12 +367,26 @@ it('lets a failing host step decide the run, exit code and all', function () {
  * The pipeline as a test drives it: a fake shell, and the diagnostics of the
  * current example.
  *
- * @param  list<array<string, string|bool>>  $steps
+ * The recipe goes through {@see Schema} on the way in rather than being handed
+ * over as written, because that is the only shape the pipeline is ever given in
+ * a real run — and it is where a step that named no `timeout` gets one.
+ *
+ * @param  list<array<string, string|bool|int|null>>  $steps
  * @param  list<string>|null  $only
  */
 function runPipeline(RecordingShell $shell, array $steps, ?array $only = null): Outcome
 {
-    return pipeline($shell)->run(test()->identity, slotPorts(), $steps, test()->path.'/.env', $only);
+    return pipeline($shell)->run(test()->identity, slotPorts(), normalisedSteps($steps), test()->path.'/.env', $only);
+}
+
+/**
+ * @param  list<array<string, string|bool|int|null>>  $steps
+ * @param  array<string, mixed>  $config  Anything else the repository configures — `step_timeout`, usually.
+ * @return list<array<string, string|bool|int|null>>
+ */
+function normalisedSteps(array $steps, array $config = []): array
+{
+    return Schema::normalise(['steps' => $steps] + $config)['steps'];
 }
 
 function pipeline(RecordingShell $shell): Pipeline

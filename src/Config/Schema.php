@@ -25,6 +25,33 @@ final readonly class Schema
     public const string File = 'config/worktree.php';
 
     /**
+     * How long a step may run for when it declares no `timeout` of its own.
+     *
+     * Thirty minutes is far above any legitimate step — the slowest real ones,
+     * a cold `composer install` and a first `npm ci`, are minutes — and far
+     * below "forever", which is what this used to be. A number rather than
+     * `null` on purpose: `null` would preserve today's behaviour and help only
+     * the people who went looking for the key, and a package whose position is
+     * that consumers should not have to configure their way out of a trap does
+     * not get to leave the trap on by default. A step that genuinely needs
+     * longer says so; a step that wants no ceiling at all says `null`.
+     */
+    public const int DefaultStepTimeout = 1800;
+
+    /**
+     * How long the runtime's `boot()` may take to get a worktree from an
+     * attached directory to a running app service.
+     *
+     * Its own limit rather than the step default, because it is the package's
+     * call rather than the application's and it is doing something no step
+     * does: resolving a `vendor/` through a throwaway Composer container, then
+     * pulling and building images. A first boot on a slow connection is the
+     * legitimate case, and an hour is what it takes to be sure a run that hit
+     * this ceiling is wedged rather than working.
+     */
+    public const int DefaultBootTimeout = 3600;
+
+    /**
      * Two defaults differ from the bash original on purpose: `slots` rises from
      * 10 to 50 because the registry is machine-global rather than per-repo, and
      * `base_branch` is null — meaning "the repository's own default branch" —
@@ -41,16 +68,18 @@ final readonly class Schema
         'repo_slug' => null,
         'env' => [],
         'compose' => ['keep_services' => [], 'port_overrides' => []],
+        'step_timeout' => self::DefaultStepTimeout,
+        'boot_timeout' => self::DefaultBootTimeout,
         'steps' => [],
     ];
 
     /**
      * The bounded step DSL. `host`, `sail` and `sail_root` are the three ways
-     * to run something; the rest describe when and how.
+     * to run something; the rest describe when, how, and for how long.
      *
      * @var list<string>
      */
-    public const array StepKeys = ['label', 'host', 'sail', 'sail_root', 'sentinel', 'when', 'allow_failure', 'degrade'];
+    public const array StepKeys = ['label', 'host', 'sail', 'sail_root', 'sentinel', 'when', 'allow_failure', 'degrade', 'timeout'];
 
     /** @var list<string> */
     public const array StepActions = ['host', 'sail', 'sail_root'];
@@ -80,7 +109,9 @@ final readonly class Schema
      *     repo_slug: string|null,
      *     env: array<string, scalar|null>,
      *     compose: array{keep_services: list<string>, port_overrides: array<string, list<string>>},
-     *     steps: list<array<string, string|bool>>,
+     *     step_timeout: int|null,
+     *     boot_timeout: int|null,
+     *     steps: list<array<string, string|bool|int|null>>,
      * }
      *
      * @throws WorktreeException on any key this package does not recognise.
@@ -110,6 +141,8 @@ final readonly class Schema
             throw self::error("slots ($slots) at stride $portStride from port_base $portBase runs past 65535");
         }
 
+        $stepTimeout = self::timeout($merged['step_timeout'], 'step_timeout');
+
         return [
             'slots' => $slots,
             'port_base' => $portBase,
@@ -119,7 +152,9 @@ final readonly class Schema
             'repo_slug' => self::repoSlug($merged['repo_slug']),
             'env' => self::environment($merged['env']),
             'compose' => self::compose($merged['compose']),
-            'steps' => self::steps($merged['steps']),
+            'step_timeout' => $stepTimeout,
+            'boot_timeout' => self::timeout($merged['boot_timeout'], 'boot_timeout'),
+            'steps' => self::steps($merged['steps'], $stepTimeout),
         ];
     }
 
@@ -283,9 +318,10 @@ final readonly class Schema
     }
 
     /**
-     * @return list<array<string, string|bool>>
+     * @param  int|null  $timeout  `step_timeout`: what a step that declares none of its own gets.
+     * @return list<array<string, string|bool|int|null>>
      */
-    private static function steps(mixed $value): array
+    private static function steps(mixed $value, ?int $timeout): array
     {
         if (! is_array($value) || ! array_is_list($value)) {
             throw self::error('steps must be a list of steps, '.self::describe($value).' given');
@@ -298,7 +334,7 @@ final readonly class Schema
                 throw self::error("steps.$index must be an array of step keys, ".self::describe($step).' given');
             }
 
-            $steps[] = self::step($step, "steps.$index");
+            $steps[] = self::step($step, "steps.$index", $timeout);
         }
 
         return $steps;
@@ -306,9 +342,9 @@ final readonly class Schema
 
     /**
      * @param  array<mixed>  $step
-     * @return array<string, string|bool>
+     * @return array<string, string|bool|int|null>
      */
-    private static function step(array $step, string $where): array
+    private static function step(array $step, string $where, ?int $timeout): array
     {
         foreach (array_keys($step) as $key) {
             if (! in_array($key, self::StepKeys, true)) {
@@ -334,10 +370,19 @@ final readonly class Schema
                     ? $entry
                     : throw self::error("$where.allow_failure must be true or false, ".self::describe($entry).' given'),
                 'when' => self::condition($entry, $where),
+                'timeout' => self::timeout($entry, "$where.timeout"),
                 default => is_string($entry) && $entry !== ''
                     ? $entry
                     : throw self::error("$where.$key must be a non-empty string, ".self::describe($entry).' given'),
             };
+        }
+
+        // Resolved here rather than in the pipeline, so that every step of the
+        // recipe carries the limit it will actually be run under before the
+        // first one starts — and so that a step which says `'timeout' => null`
+        // keeps its own answer rather than being handed the default back.
+        if (! array_key_exists('timeout', $validated)) {
+            $validated['timeout'] = $timeout;
         }
 
         // `degrade` is what makes `allow_failure` honest — the notice a skipped
@@ -349,6 +394,33 @@ final readonly class Schema
         }
 
         return $validated;
+    }
+
+    /**
+     * A number of seconds something may run for, or null for no ceiling at all.
+     *
+     * An empty value is read as null for the same reason {@see optionalString()}
+     * does: `env('WORKTREE_STEP_TIMEOUT')` with nothing exported is `''`, and
+     * "the variable is not set" is an opinion about limits rather than a
+     * malformed one.
+     */
+    private static function timeout(mixed $value, string $key): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (! is_int($value) && ! (is_string($value) && preg_match('/\A-?\d+\z/', $value) === 1)) {
+            throw self::error("$key must be a whole number of seconds, or null for no limit; ".self::describe($value).' given');
+        }
+
+        $seconds = (int) $value;
+
+        if ($seconds < 1) {
+            throw self::error("$key must be at least 1 second, or null for no limit; $seconds given");
+        }
+
+        return $seconds;
     }
 
     private static function condition(mixed $value, string $where): string

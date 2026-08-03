@@ -118,6 +118,49 @@ it('resumes a bootstrap that was killed mid-pipeline, on the same slot and the s
         ->and($this->worktree.'/.worktree-ready')->toBeFile();
 });
 
+/**
+ * The hang, end to end and without a daemon anywhere in it: a step that would
+ * not have come back is killed at its limit rather than holding this worktree's
+ * lock — and every other entry into it — for as long as it lasted.
+ */
+it('kills a step that ran past its timeout, and leaves the worktree resumable', function () {
+    configureRepository(['steps' => [
+        countingStep(sentinel: '.worktree-counted'),
+        ['label' => 'Waiting', 'host' => 'sleep 30', 'timeout' => 1],
+    ]]);
+
+    $process = worktreeCreate();
+
+    expect($process)->toHaveExited(1)
+        // Nothing on stdout: there is no path to hand back for a bootstrap that
+        // did not finish.
+        ->and($process->getOutput())->toBe('')
+        ->and($process->getErrorOutput())
+        ->toContain('error: Waiting timed out after 1s; the bootstrap stopped there')
+        ->and($this->worktree.'/.worktree-ready')->not->toBeFile()
+        // The lock goes with the run, and the slot deliberately does not — that
+        // entry is what the next create resumes.
+        ->and($this->home.'/locks/wt-desk-feat-checkout.lock')->not->toBeDirectory()
+        ->and(registered()['path'])->toBe($this->worktree);
+
+    $claimed = registered();
+
+    configureRepository(['steps' => [
+        countingStep(sentinel: '.worktree-counted'),
+        ['label' => 'Waiting', 'host' => 'true', 'timeout' => 1],
+    ]]);
+
+    $resumed = worktreeCreate();
+
+    expect($resumed)->toHaveSucceeded()
+        ->and($resumed->getOutput())->toBe($this->worktree."\n")
+        ->and(registered()['slot'])->toBe($claimed['slot'])
+        // And the step that finished before the timeout is skipped by its
+        // sentinel, exactly as it is after any other interrupted run.
+        ->and(recorded($this->worktree.'/runs.log'))->toHaveCount(1)
+        ->and($this->worktree.'/.worktree-ready')->toBeFile();
+});
+
 it('makes a second create for the same worktree wait, and then re-enter it', function () {
     configureRepository(['steps' => [countingStep(), gatedStep()]]);
 
