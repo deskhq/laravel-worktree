@@ -3,15 +3,14 @@
 namespace DeskHQ\LaravelWorktree\Console;
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
-use DeskHQ\LaravelWorktree\Config\Schema;
 use DeskHQ\LaravelWorktree\Exceptions\UsageException;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
-use DeskHQ\LaravelWorktree\Naming\Identities;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
 use DeskHQ\LaravelWorktree\Registry\Entry;
-use DeskHQ\LaravelWorktree\Registry\Locks;
-use DeskHQ\LaravelWorktree\Registry\Registry;
+use DeskHQ\LaravelWorktree\Registry\Fleet;
+use DeskHQ\LaravelWorktree\Registry\ForeignCheckout;
+use DeskHQ\LaravelWorktree\Registry\Verdict;
 use DeskHQ\LaravelWorktree\Runtime\SailRuntime;
 
 /**
@@ -128,23 +127,23 @@ final readonly class StopCommand implements Command
 
         $this->verify($invocation, $name, $named);
 
-        $identities = Identities::fromConfiguration($config, $anchor, $this->runner, $this->output);
+        $fleet = Fleet::fromConfiguration($config, $anchor, $this->runner, $this->shutdown, $this->output);
 
         $targets = $invocation->has(self::All) || $invocation->has(self::AllExcept)
-            ? $this->fleet($invocation, $name, $identities, Registry::fromConfiguration($config), $anchor)
-            : [$this->named((string) $name, $identities, $anchor)];
+            ? $this->everything($invocation, $name, $fleet)
+            : self::only($this->named((string) $name, $fleet));
 
         if ($targets === []) {
             $this->output->line(
                 'nothing to stop: no worktree'
-                .($invocation->has(self::AllRepos) ? ' on this machine' : ' of '.$identities->repoSlug())
+                .($invocation->has(self::AllRepos) ? ' on this machine' : ' of '.$fleet->repoSlug())
                 .' holds a slot'
             );
 
             return ExitCode::Success;
         }
 
-        return $this->quieten($targets, new Locks($config->home, $this->shutdown, $this->output));
+        return $this->quieten($targets, $fleet);
     }
 
     /**
@@ -202,93 +201,75 @@ final readonly class StopCommand implements Command
      * that quietly reached into another clone's worktrees would be stopping
      * containers nobody at this terminal can see.
      *
-     * @return list<Entry>
+     * @return array<string, Entry>
      */
-    private function fleet(
-        Arguments $invocation,
-        ?string $name,
-        Identities $identities,
-        Registry $registry,
-        Anchor $anchor,
-    ): array {
-        $entries = $invocation->has(self::AllRepos) ? $registry->all() : $registry->forRepo($anchor->mainRoot);
+    private function everything(Arguments $invocation, ?string $name, Fleet $fleet): array
+    {
+        $entries = $invocation->has(self::AllRepos) ? $fleet->everywhere() : $fleet->here();
 
         if ($invocation->has(self::AllExcept)) {
             // Resolved through the registry, and refused when nothing holds it:
             // a typo here would stop the very worktree it was typed to protect.
-            $keep = $this->named((string) $name, $identities, $anchor);
+            $keep = $this->named((string) $name, $fleet);
 
-            $entries = array_filter($entries, fn (Entry $entry): bool => $entry->key !== $keep->key);
+            $entries = array_diff_key($entries, self::only($keep));
 
             $this->output->line("keeping $keep->key running");
         }
 
-        return array_values($entries);
+        return $entries;
     }
 
     /**
      * The one worktree $name holds, refusing a key that is not this checkout's.
      *
-     * The read-only lookup `path` makes ({@see Identities::locate()}): no `gh`,
+     * The read-only lookup `path` makes ({@see Fleet::locate()}): no `gh`,
      * nothing written, and a number matched against the registry rather than
      * derived, since `441` became `441-fix-login` or `issue-441` depending on
      * what `gh` said the day the worktree was made.
      *
+     * No `create` in the refusal, deliberately: somebody who mistyped the name
+     * of a worktree they meant to stop is not asking to bootstrap one.
+     *
      * @throws WorktreeException when nothing holds $name, or another checkout does.
      */
-    private function named(string $name, Identities $identities, Anchor $anchor): Entry
+    private function named(string $name, Fleet $fleet): Entry
     {
-        $entry = $identities->locate($name);
-
-        if ($entry === null) {
-            throw new WorktreeException(
-                'no worktree of '.$identities->repoSlug()." is registered as '$name'; "
-                ."'worktree list' shows the ones there are"
-            );
-        }
-
         // A key is a Compose project name, so an entry another checkout holds is
         // another checkout's containers — the collision `remove` refuses on the
         // way out, refused here in the same words.
-        if (! $entry->belongsTo($anchor->mainRoot)) {
-            throw new WorktreeException(
-                "'$entry->key' is registered to $entry->repo, not to ".rtrim($anchor->mainRoot, '/').'; '
-                .'stopping it from here would stop that checkout\'s containers — run it from there, '
-                ."or set 'repo_slug' in ".Schema::File.' to tell the two apart'
-            );
-        }
+        return $fleet->require($name, ForeignCheckout::because(
+            'stopping it from here would stop that checkout\'s containers'
+        ));
+    }
 
-        return $entry;
+    /**
+     * One entry in the shape a sweep wants: keyed by the project name its
+     * lock, its containers and its registry row all agree on.
+     *
+     * @return array<string, Entry>
+     */
+    private static function only(Entry $entry): array
+    {
+        return [$entry->key => $entry];
     }
 
     /**
      * Stop each project under its own lock, and report what would not go.
      *
-     * @param  list<Entry>  $targets
+     * @param  array<string, Entry>  $targets
      */
-    private function quieten(array $targets, Locks $locks): int
+    private function quieten(array $targets, Fleet $fleet): int
     {
         $runtime = SailRuntime::for($this->output, $this->runner);
-        $stopped = [];
-        $failed = [];
 
-        foreach ($targets as $entry) {
-            $quiet = $locks->worktree($entry->key)->hold(
-                // The directory is an optimisation, not a requirement: an entry
-                // whose worktree somebody deleted still names containers.
-                fn (): bool => $runtime->stop($entry->key, is_dir($entry->path) ? $entry->path : null),
-            );
+        $swept = $fleet->sweep($targets, fn (Entry $entry, string $key): Verdict => Verdict::of(
+            // The directory is an optimisation, not a requirement: an entry
+            // whose worktree somebody deleted still names containers.
+            $runtime->stop($key, is_dir($entry->path) ? $entry->path : null),
+        ));
 
-            if ($quiet) {
-                $stopped[] = $entry->key;
-
-                continue;
-            }
-
-            $failed[] = $entry->key;
-        }
-
-        return $this->report($stopped, $failed);
+        return $this->report($swept->succeeded, $swept->survived);
     }
 
     /**

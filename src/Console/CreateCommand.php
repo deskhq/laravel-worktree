@@ -15,12 +15,12 @@ use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Git\BaseRefs;
 use DeskHQ\LaravelWorktree\Git\Excludes;
 use DeskHQ\LaravelWorktree\Git\Worktrees;
-use DeskHQ\LaravelWorktree\Naming\Identities;
 use DeskHQ\LaravelWorktree\Naming\Identity;
 use DeskHQ\LaravelWorktree\Naming\PullRequests;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
 use DeskHQ\LaravelWorktree\Registry\Allocator;
 use DeskHQ\LaravelWorktree\Registry\Entry;
+use DeskHQ\LaravelWorktree\Registry\Fleet;
 use DeskHQ\LaravelWorktree\Runtime\Runtime;
 use DeskHQ\LaravelWorktree\Runtime\SailRuntime;
 
@@ -159,14 +159,13 @@ final readonly class CreateCommand implements Command
             );
         }
 
-        $identities = Identities::fromConfiguration($config, $anchor, $this->runner, $this->output);
-        $identity = $pullRequest ? $identities->identifyPullRequest($name) : $identities->identify($name);
-        $allocator = Allocator::fromConfiguration($config, $this->shutdown, $this->output);
+        $fleet = Fleet::fromConfiguration($config, $anchor, $this->runner, $this->shutdown, $this->output);
+        $identity = $pullRequest ? $fleet->identifyPullRequest($name) : $fleet->identify($name);
 
         // Before anything is read, and given back only when this process ends.
-        $allocator->locks()->worktree($identity->key)->acquire();
+        $fleet->claim($identity->key);
 
-        $entry = $this->registered($allocator, $identity);
+        $entry = $this->registered($fleet, $identity);
 
         // Whether git has to be asked for anything at all beyond a verification:
         // a worktree this checkout already has is entered again as it is, and
@@ -189,13 +188,7 @@ final readonly class CreateCommand implements Command
             // exists and a refusal costs a teardown. Pure parsing, no daemon.
             PublishedPorts::of($anchor->mainRoot)->verify($config);
 
-            $entry = $allocator->allocate(
-                $identity->key,
-                $anchor->mainRoot,
-                $identity->slug,
-                $identity->branch,
-                $identity->path,
-            );
+            $entry = $fleet->allocate($identity->key, $identity->slug, $identity->branch, $identity->path);
 
             // Git first, because there is nowhere to write anything until the
             // directory exists — and, for a pull request from a fork, because
@@ -203,7 +196,7 @@ final readonly class CreateCommand implements Command
             // has to be told what it turned out to be.
             if ($pullRequest && ! $known) {
                 [$identity, $entry] = $this->checkedOut(
-                    $allocator,
+                    $fleet,
                     $identity,
                     $entry,
                     $this->worktrees($anchor)->attachPullRequest($identity->path, $identity->name, $identity->branch),
@@ -219,7 +212,7 @@ final readonly class CreateCommand implements Command
             $outcome = $this->bootstrap($identity, $entry, $config, $anchor, $runtime);
         }
 
-        $entry = $this->record($allocator, $entry, $outcome);
+        $entry = $this->record($fleet, $entry, $outcome);
 
         // The one line of this run that reaches the caller.
         $this->emitter->emit($invocation->has(self::Json) ? $entry->toJson() : $entry->path);
@@ -239,9 +232,9 @@ final readonly class CreateCommand implements Command
      * than failing is what a person who deleted a directory expects, since the
      * branch, and therefore the work, is still in the repository.
      */
-    private function registered(Allocator $allocator, Identity $identity): ?Entry
+    private function registered(Fleet $fleet, Identity $identity): ?Entry
     {
-        $entry = $allocator->registry()->entry($identity->key);
+        $entry = $fleet->entry($identity->key);
 
         if ($entry === null || is_dir($entry->path)) {
             return $entry;
@@ -252,7 +245,7 @@ final readonly class CreateCommand implements Command
             .'but there is no directory there any more; forgetting that entry and creating the worktree again'
         );
 
-        $allocator->release($identity->key);
+        $fleet->release($identity->key);
 
         return null;
     }
@@ -323,7 +316,7 @@ final readonly class CreateCommand implements Command
      *
      * @return array{Identity, Entry}
      */
-    private function checkedOut(Allocator $allocator, Identity $identity, Entry $entry, string $branch): array
+    private function checkedOut(Fleet $fleet, Identity $identity, Entry $entry, string $branch): array
     {
         if ($branch === $identity->branch) {
             return [$identity, $entry];
@@ -336,7 +329,7 @@ final readonly class CreateCommand implements Command
 
         $entry = $entry->withBranch($branch);
 
-        $allocator->record($entry);
+        $fleet->record($entry);
 
         return [new Identity($identity->name, $identity->slug, $identity->key, $branch, $identity->path), $entry];
     }
@@ -385,7 +378,7 @@ final readonly class CreateCommand implements Command
      * machine-global state at all — which is also what keeps it off the
      * registry lock that every other repository on this machine is sharing.
      */
-    private function record(Allocator $allocator, Entry $entry, Outcome $outcome): Entry
+    private function record(Fleet $fleet, Entry $entry, Outcome $outcome): Entry
     {
         if ($entry->degraded === $outcome->names()) {
             return $entry;
@@ -393,7 +386,7 @@ final readonly class CreateCommand implements Command
 
         $entry = $entry->withDegraded($outcome->names());
 
-        $allocator->record($entry);
+        $fleet->record($entry);
 
         return $entry;
     }

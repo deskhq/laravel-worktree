@@ -5,6 +5,8 @@ use DeskHQ\LaravelWorktree\Console\ShutdownHandler;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Registry\Allocator;
 use DeskHQ\LaravelWorktree\Registry\Entry;
+use DeskHQ\LaravelWorktree\Registry\Locks;
+use DeskHQ\LaravelWorktree\Registry\Registry;
 
 /**
  * Slot and port allocation: the lowest free slot, the block that follows from
@@ -15,7 +17,18 @@ beforeEach(function () {
     $this->home = temporaryDirectory('worktree-home');
     $this->diagnostics = fopen('php://memory', 'w+');
     $this->base = freePortBase(100);
-    $this->allocator = allocatorIn($this->home, $this->base, $this->diagnostics);
+
+    // Built over a registry and a set of locks this case can also look at,
+    // which is how a run wires it too ({@see Fleet}): the allocator is handed
+    // both rather than making its own. A second `Locks` here would be a second
+    // set of objects, and `isHeld()` is a fact about an object rather than
+    // about the directory on disk.
+    $output = new Output($this->diagnostics);
+    $config = configurationIn($this->home, ['slots' => 50, 'port_base' => $this->base]);
+
+    $this->registry = Registry::fromConfiguration($config);
+    $this->locks = new Locks($config->home, new ShutdownHandler($output), $output);
+    $this->allocator = Allocator::over($this->registry, $this->locks, $config, $output);
 });
 
 afterEach(function () {
@@ -54,7 +67,7 @@ it('resumes the slot a key already holds instead of taking another', function ()
     expect($resumed->slot)->toBe($claimed->slot)
         ->and($resumed->ports)->toBe($claimed->ports)
         ->and($resumed->createdAt)->toBe($claimed->createdAt)
-        ->and($this->allocator->registry()->claimedSlots())->toBe([0]);
+        ->and($this->registry->claimedSlots())->toBe([0]);
 });
 
 it('resumes on the ports the entry recorded, deriving only what it does not name', function () {
@@ -191,7 +204,7 @@ it('draws two checkouts of the same repository from the same machine registry', 
     expect($first->slot)->toBe(0)
         ->and($second->slot)->toBe(1)
         ->and(array_intersect(array_values($first->ports), array_values($second->ports)))->toBe([])
-        ->and(array_keys($this->allocator->registry()->forRepo('/checkouts/desk')))->toBe(['wt-desk-441']);
+        ->and(array_keys($this->registry->forRepo('/checkouts/desk')))->toBe(['wt-desk-441']);
 });
 
 it('refuses a key another checkout already registered', function () {
@@ -213,7 +226,7 @@ it('gives a released slot to the next worktree that asks', function () {
 
     expect($second->slot)->toBe(1)
         ->and($third->slot)->toBe(0)
-        ->and($this->allocator->registry()->entry('wt-desk-441'))->toBeNull();
+        ->and($this->registry->entry('wt-desk-441'))->toBeNull();
 });
 
 it('holds the machine-wide lock only while it allocates', function () {
@@ -222,9 +235,9 @@ it('holds the machine-wide lock only while it allocates', function () {
     // The slow work — git, Composer, Sail, npm — happens after allocation
     // returns, so the lock every other repository on the machine waits behind
     // has to be gone by then, while this worktree's own is still held.
-    expect($this->allocator->locks()->registry()->isHeld())->toBeFalse()
+    expect($this->locks->registry()->isHeld())->toBeFalse()
         ->and($this->home.'/registry.lock')->not->toBeDirectory()
-        ->and($this->allocator->locks()->worktree('wt-desk-441')->isHeld())->toBeTrue()
+        ->and($this->locks->worktree('wt-desk-441')->isHeld())->toBeTrue()
         ->and($this->home.'/locks/wt-desk-441.lock')->toBeDirectory();
 });
 

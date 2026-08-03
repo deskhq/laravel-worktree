@@ -10,16 +10,20 @@ use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 /**
  * Where a worktree gets its slot — and therefore its ports — from.
  *
- * Two calls, `allocate` and `release`, either of which is the whole of one
- * command's dealings with the registry. Both take the worktree's own lock
- * first, so a second `create 441` waits for the first instead of running git,
- * Composer, Sail and npm alongside it in the same directory, and both do their
- * reading and writing inside the registry lock, so the free-slot search and the
- * claim that follows it are one indivisible step.
+ * Everything that writes to the registry does it here: `allocate`, `release`
+ * and `record`, and each of them through {@see ordered()} — the worktree's own
+ * lock first, so a second `create 441` waits for the first instead of running
+ * git, Composer, Sail and npm alongside it in the same directory, then the
+ * registry's, so the free-slot search and the claim that follows it are one
+ * indivisible step. That order is stated in that one method, and nowhere else
+ * in this package.
  *
  * The registry lock is deliberately let go before this returns: the slow work a
  * command does afterwards must not block every other repository on the machine
  * from allocating.
+ *
+ * A command does not reach for this directly. {@see Fleet} is what a run holds,
+ * and it hands this one the registry and the locks the rest of the run is using.
  */
 final readonly class Allocator
 {
@@ -35,24 +39,23 @@ final readonly class Allocator
 
     public static function fromConfiguration(Configuration $config, ShutdownHandler $shutdown, Output $output): self
     {
-        return new self(
+        return self::over(
             Registry::fromConfiguration($config),
             new Locks($config->home, $shutdown, $output),
-            Ports::fromConfiguration($config),
-            new BindProbe,
+            $config,
             $output,
-            $config->slots,
         );
     }
 
-    public function registry(): Registry
+    /**
+     * An allocator over a registry and a set of locks somebody else already
+     * has, which is how {@see Fleet} builds one: a run reads one registry and
+     * takes locks from one place, or the two halves of it can disagree about
+     * what is claimed.
+     */
+    public static function over(Registry $registry, Locks $locks, Configuration $config, Output $output): self
     {
-        return $this->registry;
-    }
-
-    public function locks(): Locks
-    {
-        return $this->locks;
+        return new self($registry, $locks, Ports::fromConfiguration($config), new BindProbe, $output, $config->slots);
     }
 
     /**
@@ -70,13 +73,11 @@ final readonly class Allocator
     {
         $repo = rtrim($repo, '/');
 
-        $this->locks->worktree($key)->acquire();
-
-        return $this->locks->registry()->hold(function () use ($key, $repo, $slug, $branch, $path): Entry {
+        return $this->ordered($key, function () use ($key, $repo, $slug, $branch, $path): Entry {
             $entry = $this->registry->entry($key);
 
             if ($entry !== null) {
-                $this->refuseForeignCheckout($entry, $repo);
+                ForeignCheckout::refuseClaim($entry, $repo);
 
                 return $entry;
             }
@@ -104,13 +105,15 @@ final readonly class Allocator
      * Write an entry back as the run that owns it now has it — the degraded
      * steps a bootstrap just left behind.
      *
-     * The slot is not in question here, so this takes only the registry lock,
-     * and only for the read-modify-write: the caller is holding the worktree's
-     * own lock already, and has been since before it read the entry.
+     * The slot is not in question here, so the registry lock covers nothing but
+     * the read-modify-write. The worktree's own lock is taken first all the
+     * same ({@see ordered()}) — it is a no-op for every caller there is, each
+     * of which has held it since before it read the entry, and stating the
+     * order in one place is worth more than saving the call.
      */
     public function record(Entry $entry): void
     {
-        $this->locks->registry()->hold(function () use ($entry): void {
+        $this->ordered($entry->key, function () use ($entry): void {
             $this->registry->put($entry);
         });
     }
@@ -125,11 +128,36 @@ final readonly class Allocator
      */
     public function release(string $key): void
     {
-        $this->locks->worktree($key)->acquire();
-
-        $this->locks->registry()->hold(function () use ($key): void {
+        $this->ordered($key, function () use ($key): void {
             $this->registry->forget($key);
         });
+    }
+
+    /**
+     * Do $work holding both locks, in the one order this package ever takes
+     * them: **the worktree's own first, then the registry's.**
+     *
+     * Stated here and nowhere else, because a second place stating it is a
+     * second place to get it backwards — and two runs taking the same two locks
+     * in opposite orders is the textbook deadlock. It is also the cheaper order
+     * to hold: the registry lock is machine-wide and every repository on the
+     * machine waits behind it, so it is taken last, held for a read, a decision
+     * and a write, and given back here rather than by the caller.
+     *
+     * A worktree lock this run already holds stays held — `create` takes it on
+     * the way in and everything below takes it again, and neither should have
+     * to know about the other ({@see Lock::acquire()}).
+     *
+     * @template T
+     *
+     * @param  callable(): T  $work
+     * @return T
+     */
+    private function ordered(string $key, callable $work): mixed
+    {
+        $this->locks->worktree($key)->acquire();
+
+        return $this->locks->registry()->hold($work);
     }
 
     /**
@@ -199,25 +227,5 @@ final readonly class Allocator
             .' worktree directory is gone; '
             ."'worktree reap".(count($here) === count($dead) ? '' : ' --all')."' reclaims ".($one ? 'it' : 'them')
             .", or free one with 'worktree remove <slug>'";
-    }
-
-    /**
-     * A key is a Compose project name, and Compose project names are what
-     * containers and volumes are scoped by — so two checkouts registering the
-     * same one would not merely share a registry entry, they would share
-     * containers. That is what a second clone of a repository looks like when
-     * `repo_slug` was left to default to the directory name and both clones
-     * have the same one.
-     */
-    private function refuseForeignCheckout(Entry $entry, string $repo): void
-    {
-        if ($entry->belongsTo($repo)) {
-            return;
-        }
-
-        throw new WorktreeException(
-            "'$entry->key' is already registered to $entry->repo, not $repo; "
-            ."two checkouts cannot share a project name — set 'repo_slug' in config/worktree.php to tell them apart"
-        );
     }
 }

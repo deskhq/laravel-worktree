@@ -9,8 +9,8 @@ use DeskHQ\LaravelWorktree\Naming\Identities;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
 use DeskHQ\LaravelWorktree\Registry\DeadEntries;
 use DeskHQ\LaravelWorktree\Registry\DeadEntry;
-use DeskHQ\LaravelWorktree\Registry\Locks;
-use DeskHQ\LaravelWorktree\Registry\Registry;
+use DeskHQ\LaravelWorktree\Registry\Fleet;
+use DeskHQ\LaravelWorktree\Registry\Verdict;
 use DeskHQ\LaravelWorktree\Runtime\Orphan;
 use DeskHQ\LaravelWorktree\Runtime\Orphans;
 use DeskHQ\LaravelWorktree\Runtime\Runtime;
@@ -148,23 +148,21 @@ final readonly class ReapCommand implements Command
         }
 
         $everywhere = $invocation->has(self::All);
-        $registry = Registry::fromConfiguration($config);
+        $fleet = Fleet::fromConfiguration($config, $anchor, $this->runner, $this->shutdown, $this->output);
 
         // Scoped exactly as `list`'s warning is, and asked for only when it is
         // needed: deriving the repository's own name can fail on a checkout
         // whose directory name slugifies to nothing, and `--all` has no use for
         // it at all.
-        $repoSlug = $everywhere
-            ? null
-            : Identities::fromConfiguration($config, $anchor, $this->runner, $this->output)->repoSlug();
+        $repoSlug = $everywhere ? null : $fleet->repoSlug();
 
-        $scan = Orphans::for($registry, $this->runner, $this->output);
+        $scan = $fleet->scan();
         $orphans = $scan->under(Orphans::prefix($repoSlug));
 
         // Nothing to do with the daemon: an entry and a directory, which is why
         // this half of the sweep still works with Docker Desktop closed. What
         // needs the daemon is the teardown that reclaiming one ends with.
-        $dead = DeadEntries::for($registry)->of($everywhere ? null : $anchor->mainRoot);
+        $dead = $fleet->dead($everywhere ? null : $anchor->mainRoot);
 
         if ($orphans === [] && $dead === []) {
             return $this->nothing($scan->reachable(), $repoSlug);
@@ -187,7 +185,7 @@ final readonly class ReapCommand implements Command
             return $permission;
         }
 
-        return $this->destroy($orphans, $dead, $registry, new Locks($config->home, $this->shutdown, $this->output));
+        return $this->destroy($orphans, $dead, $fleet);
     }
 
     /**
@@ -309,60 +307,70 @@ final readonly class ReapCommand implements Command
      * project may well still be on the daemon, which is the reason the
      * directory going is not the end of it.
      *
+     * One key's lock at a time and given back before the next is taken, both
+     * times, which is the whole of why this is {@see Fleet::sweep()} rather
+     * than a loop written here: holding all of them would make a machine-wide
+     * reap block every create on the machine for as long as it runs.
+     *
      * @param  list<Orphan>  $orphans
      * @param  list<DeadEntry>  $dead
      */
-    private function destroy(array $orphans, array $dead, Registry $registry, Locks $locks): int
+    private function destroy(array $orphans, array $dead, Fleet $fleet): int
     {
         $runtime = SailRuntime::for($this->output, $this->runner);
-        $reaped = [];
-        $reclaimed = [];
-        $survived = [];
-        $held = [];
 
-        foreach ($orphans as $orphan) {
-            // One key's lock at a time, given back before the next is taken:
-            // holding all of them would make a machine-wide reap block every
-            // create on the machine for as long as it runs.
-            $result = $locks->worktree($orphan->project)->hold(
-                fn (): ?TeardownResult => $this->claimed($registry, $orphan) ? null : $runtime->teardown($orphan->project)
-            );
+        $projects = self::byKey($orphans, fn (Orphan $orphan): string => $orphan->project);
+        $entries = self::byKey($dead, fn (DeadEntry $entry): string => $entry->key());
 
-            if ($result === null) {
-                continue;
-            }
+        $reaped = $fleet->sweep($projects, fn (Orphan $orphan, string $key): ?Verdict => $this->verdict(
+            $this->claimed($fleet, $orphan) ? null : $runtime->teardown($key)
+        ));
 
-            if ($result->succeeded()) {
-                $reaped[] = $orphan->project;
+        $reclaimed = $fleet->sweep($entries, fn (DeadEntry $entry): ?Verdict => $this->verdict(
+            $this->reclaim($fleet, $runtime, $entry)
+        ));
 
-                continue;
-            }
+        return $this->report(
+            $reaped->succeeded,
+            // The slot beside the key, because giving one back is what the
+            // person came here for and the key alone does not say which.
+            array_map(
+                fn (string $key): string => $key.' (slot '.$entries[$key]->entry->slot.')',
+                $reclaimed->succeeded,
+            ),
+            [...$reaped->survived, ...$reclaimed->survived],
+            $reclaimed->survived,
+        );
+    }
 
-            $this->output->error($result->describe());
-            $survived[] = $orphan->project;
+    /**
+     * A teardown as a sweep reads it: whether the project went, and the only
+     * account there is of what would not — null passes a skip straight through.
+     */
+    private function verdict(?TeardownResult $result): ?Verdict
+    {
+        return $result === null ? null : Verdict::of($result->succeeded(), $result->describe());
+    }
+
+    /**
+     * The two classes as a sweep wants them: keyed by the project name their
+     * lock, their containers and their registry row all agree on.
+     *
+     * @template TItem
+     *
+     * @param  list<TItem>  $items
+     * @param  callable(TItem): string  $key
+     * @return array<string, TItem>
+     */
+    private static function byKey(array $items, callable $key): array
+    {
+        $keyed = [];
+
+        foreach ($items as $item) {
+            $keyed[$key($item)] = $item;
         }
 
-        foreach ($dead as $entry) {
-            $result = $locks->worktree($entry->key())->hold(
-                fn (): ?TeardownResult => $this->reclaim($registry, $locks, $runtime, $entry)
-            );
-
-            if ($result === null) {
-                continue;
-            }
-
-            if ($result->succeeded()) {
-                $reclaimed[] = $entry->key().' (slot '.$entry->entry->slot.')';
-
-                continue;
-            }
-
-            $this->output->error($result->describe());
-            $survived[] = $entry->key();
-            $held[] = $entry->key();
-        }
-
-        return $this->report($reaped, $reclaimed, $survived, $held);
+        return $keyed;
     }
 
     /**
@@ -380,9 +388,9 @@ final readonly class ReapCommand implements Command
      * dropping the row first would leave containers and volumes with nothing
      * naming them, which is the-desk#1095 exactly.
      */
-    private function reclaim(Registry $registry, Locks $locks, Runtime $runtime, DeadEntry $dead): ?TeardownResult
+    private function reclaim(Fleet $fleet, Runtime $runtime, DeadEntry $dead): ?TeardownResult
     {
-        $entry = $registry->entry($dead->key());
+        $entry = $fleet->entry($dead->key());
 
         if ($entry === null) {
             $this->output->line(
@@ -411,7 +419,7 @@ final readonly class ReapCommand implements Command
         $result = $runtime->teardown($entry->key);
 
         if ($result->succeeded()) {
-            $locks->registry()->hold(fn () => $registry->forget($entry->key));
+            $fleet->release($entry->key);
         }
 
         return $result;
@@ -425,9 +433,9 @@ final readonly class ReapCommand implements Command
      * entry is there and this is no longer an orphan — or waiting on the lock
      * this holds, and will find its containers where it left them.
      */
-    private function claimed(Registry $registry, Orphan $orphan): bool
+    private function claimed(Fleet $fleet, Orphan $orphan): bool
     {
-        $entry = $registry->entry($orphan->project);
+        $entry = $fleet->entry($orphan->project);
 
         if ($entry === null) {
             return false;

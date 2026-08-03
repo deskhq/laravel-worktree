@@ -3,17 +3,16 @@
 namespace DeskHQ\LaravelWorktree\Console;
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
-use DeskHQ\LaravelWorktree\Config\Schema;
 use DeskHQ\LaravelWorktree\Exceptions\UsageException;
-use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Git\BaseRefs;
 use DeskHQ\LaravelWorktree\Git\Worktrees;
 use DeskHQ\LaravelWorktree\Naming\Identities;
 use DeskHQ\LaravelWorktree\Naming\Identity;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
-use DeskHQ\LaravelWorktree\Registry\Allocator;
 use DeskHQ\LaravelWorktree\Registry\Entry;
+use DeskHQ\LaravelWorktree\Registry\Fleet;
+use DeskHQ\LaravelWorktree\Registry\ForeignCheckout;
 use DeskHQ\LaravelWorktree\Runtime\SailRuntime;
 use DeskHQ\LaravelWorktree\Runtime\TeardownResult;
 
@@ -90,19 +89,19 @@ final readonly class RemoveCommand implements Command
             throw new UsageException('remove takes one name; given '.implode(' ', $invocation->positional));
         }
 
-        $identity = Identities::fromConfiguration($config, $anchor, $this->runner, $this->output)->identify($name);
-        $allocator = Allocator::fromConfiguration($config, $this->shutdown, $this->output);
+        $fleet = Fleet::fromConfiguration($config, $anchor, $this->runner, $this->shutdown, $this->output);
+        $identity = $fleet->identify($name);
         $worktrees = $this->worktrees($anchor);
 
         // Before the registry is read, and given back only when this process
         // ends: everything below is one indivisible teardown of one worktree.
-        $allocator->locks()->worktree($identity->key)->acquire();
+        $fleet->claim($identity->key);
 
-        $entry = $allocator->registry()->entry($identity->key);
+        $entry = $fleet->entry($identity->key);
 
         $worktree = $entry === null
             ? $this->derived($identity, $anchor, $worktrees)
-            : $this->recorded($identity, $entry, $anchor);
+            : $this->recorded($identity, $entry, $fleet);
 
         $result = SailRuntime::for($this->output, $this->runner)->teardown($worktree->key, $worktree->path);
 
@@ -111,7 +110,7 @@ final readonly class RemoveCommand implements Command
         // The slot comes back whatever the daemon did with the volumes, because
         // the git side is finished and the slot is genuinely free. What did not
         // work is said below, and loudly.
-        $allocator->release($identity->key);
+        $fleet->release($identity->key);
 
         return $this->report($worktree, $entry, $result);
     }
@@ -124,9 +123,15 @@ final readonly class RemoveCommand implements Command
      * worktree was made, derives a directory that was never there — and the
      * entry is the only record of where the thing actually is.
      */
-    private function recorded(Identity $identity, Entry $entry, Anchor $anchor): Identity
+    private function recorded(Identity $identity, Entry $entry, Fleet $fleet): Identity
     {
-        $this->refuseForeignCheckout($entry, $anchor->mainRoot);
+        // A key is a Compose project name, so an entry claimed by another
+        // checkout is another checkout's containers and volumes — the collision
+        // the allocator refuses on the way in, refused here on the way out
+        // rather than destroyed.
+        $fleet->verify($entry, ForeignCheckout::because(
+            'removing it from here would tear down that checkout\'s containers'
+        ));
 
         if ($entry->path === $identity->path) {
             return $identity;
@@ -218,25 +223,6 @@ final readonly class RemoveCommand implements Command
         );
 
         return ExitCode::Failure;
-    }
-
-    /**
-     * A key is a Compose project name, so an entry claimed by another checkout
-     * is another checkout's containers and volumes — the collision the
-     * allocator refuses on the way in, refused here on the way out rather than
-     * destroyed.
-     */
-    private function refuseForeignCheckout(Entry $entry, string $repo): void
-    {
-        if ($entry->belongsTo($repo)) {
-            return;
-        }
-
-        throw new WorktreeException(
-            "'$entry->key' is registered to $entry->repo, not to ".rtrim($repo, '/').'; '
-            .'removing it from here would tear down that checkout\'s containers — run it from there, '
-            ."or set 'repo_slug' in ".Schema::File.' to tell the two apart'
-        );
     }
 
     private function worktrees(Anchor $anchor): Worktrees

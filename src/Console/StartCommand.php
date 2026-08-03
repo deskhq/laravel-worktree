@@ -7,17 +7,15 @@ use DeskHQ\LaravelWorktree\Compose\ComposeVersion;
 use DeskHQ\LaravelWorktree\Compose\Overlay;
 use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Config\EnvFile;
-use DeskHQ\LaravelWorktree\Config\Schema;
 use DeskHQ\LaravelWorktree\Exceptions\UsageException;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Git\Excludes;
-use DeskHQ\LaravelWorktree\Naming\Identities;
 use DeskHQ\LaravelWorktree\Naming\Identity;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
 use DeskHQ\LaravelWorktree\Registry\Entry;
-use DeskHQ\LaravelWorktree\Registry\Locks;
-use DeskHQ\LaravelWorktree\Registry\Registry;
+use DeskHQ\LaravelWorktree\Registry\Fleet;
+use DeskHQ\LaravelWorktree\Registry\ForeignCheckout;
 use DeskHQ\LaravelWorktree\Runtime\SailRuntime;
 
 /**
@@ -104,15 +102,27 @@ final readonly class StartCommand implements Command
             throw new UsageException('start takes one name; given '.implode(' ', $invocation->positional));
         }
 
-        $identities = Identities::fromConfiguration($config, $anchor, $this->runner, $this->output);
-        $registry = Registry::fromConfiguration($config);
-        $entry = $this->located($name, $identities, $anchor);
+        $fleet = Fleet::fromConfiguration($config, $anchor, $this->runner, $this->shutdown, $this->output);
+
+        // A key is a Compose project name, so an entry another checkout holds
+        // is another checkout's containers, and starting them from here would
+        // bring up services this repository does not own on ports it did not
+        // allocate.
+        $entry = $fleet->require(
+            $name,
+            ForeignCheckout::because('starting it from here would bring up that checkout\'s containers'),
+            hint: 'create',
+        );
 
         // Before the entry is believed, and given back only when this process
         // ends: everything below is one indivisible start of one worktree.
-        (new Locks($config->home, $this->shutdown, $this->output))->worktree($entry->key)->acquire();
+        $fleet->claim($entry->key);
 
-        $entry = $this->stillRegistered($registry, $entry);
+        // Asked again now that the lock is held, and refused rather than
+        // resumed if it went: booting the project a `remove` this run queued
+        // behind has just torn down would put containers back on the machine
+        // with nothing in the registry naming them.
+        $entry = $fleet->stillHeld($entry);
 
         $identity = new Identity($name, $entry->slug, $entry->key, $entry->branch, $entry->path);
 
@@ -132,61 +142,6 @@ final readonly class StartCommand implements Command
         $this->output->line("started $entry->key at $entry->path; nothing was bootstrapped, and its slot never moved");
 
         return ExitCode::Success;
-    }
-
-    /**
-     * The entry $name holds, refusing a key that is not this checkout's.
-     *
-     * The read-only lookup `path` and `stop` make ({@see Identities::locate()}),
-     * and the refusal `remove` makes: a key is a Compose project name, so an
-     * entry another checkout holds is another checkout's containers, and
-     * starting them from here would bring up services this repository does not
-     * own on ports it did not allocate.
-     *
-     * @throws WorktreeException when nothing holds $name, or another checkout does.
-     */
-    private function located(string $name, Identities $identities, Anchor $anchor): Entry
-    {
-        $entry = $identities->locate($name);
-
-        if ($entry === null) {
-            throw new WorktreeException(
-                'no worktree of '.$identities->repoSlug()." is registered as '$name'; "
-                ."'worktree create $name' makes one, and 'worktree list' shows the ones there are"
-            );
-        }
-
-        if (! $entry->belongsTo($anchor->mainRoot)) {
-            throw new WorktreeException(
-                "'$entry->key' is registered to $entry->repo, not to ".rtrim($anchor->mainRoot, '/').'; '
-                .'starting it from here would bring up that checkout\'s containers — run it from there, '
-                ."or set 'repo_slug' in ".Schema::File.' to tell the two apart'
-            );
-        }
-
-        return $entry;
-    }
-
-    /**
-     * The entry as it stands now that the lock is held.
-     *
-     * Read again rather than trusted, because the first read happened outside
-     * the lock: a `remove` this run queued behind has freed the slot by the time
-     * it gets in, and booting the project it just tore down would put containers
-     * back on the machine with nothing in the registry naming them.
-     */
-    private function stillRegistered(Registry $registry, Entry $entry): Entry
-    {
-        $current = $registry->entry($entry->key);
-
-        if ($current !== null) {
-            return $current;
-        }
-
-        throw new WorktreeException(
-            "nothing in the registry holds $entry->key any more — something released it while this run was "
-            ."waiting for its lock; 'worktree create $entry->slug' makes it again"
-        );
     }
 
     /**
