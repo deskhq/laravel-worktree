@@ -73,9 +73,9 @@ final readonly class SailRuntime implements Runtime
      * whichever Composer image `WORKTREE_COMPOSER_IMAGE` names.
      *
      * $bootTimeout is the repository's `boot_timeout`, and is left at the
-     * package default by the two callers that only ever tear down — `remove`
-     * and `reap` reach for a runtime to take a project off the machine, never
-     * to bring one up.
+     * package default by the callers that never bring anything up — `remove`
+     * and `reap` reach for a runtime to take a project off the machine, and
+     * `stop` to quieten one. `create` and `start` are the two that boot.
      */
     public static function for(Output $output, ProcessRunner $runner, ?int $bootTimeout = Schema::DefaultBootTimeout): self
     {
@@ -108,10 +108,17 @@ final readonly class SailRuntime implements Runtime
      * this worktree's lock for as long as it lasted, with nothing on screen to
      * tell it from an image that is genuinely still building.
      *
+     * The two clauses a failure ends with are the caller's, because the same
+     * call is made by `create` and by `start` and the answer to "what now?" is
+     * different: see {@see Runtime::boot()}.
+     *
      * @throws WorktreeException when Sail cannot be obtained, when either half ran past `boot_timeout`, or when the service refuses to start.
      */
-    public function boot(Identity $worktree, string $environmentFile): void
+    public function boot(Identity $worktree, string $environmentFile, ?string $halted = null, ?string $remedy = null): void
     {
+        $halted ??= 'the bootstrap stopped there';
+        $remedy ??= "'worktree create $worktree->name' picks up where it left off";
+
         $service = AppService::in(is_file($environmentFile) ? Assignments::read($environmentFile) : Assignments::of(''));
 
         try {
@@ -126,17 +133,64 @@ final readonly class SailRuntime implements Runtime
         } catch (TimedOutException $timedOut) {
             throw new WorktreeException(
                 "'$timedOut->commandLine' was still running after {$timedOut->seconds}s in $worktree->path and was killed; "
-                .'the bootstrap stopped there — fix it, or raise boot_timeout in '.Schema::File.', then '
-                ."'worktree create $worktree->name' picks up where it left off"
+                ."$halted — fix it, or raise boot_timeout in ".Schema::File.", then $remedy"
             );
         }
 
         if ($exitCode !== 0) {
             throw new WorktreeException(
                 "'".Action::Binary." up -d $service' failed (exit $exitCode) in $worktree->path; "
-                ."the bootstrap stopped there — fix it, then 'worktree create $worktree->name' picks up where it left off"
+                ."$halted — fix it, then $remedy"
             );
         }
+    }
+
+    /**
+     * Stop the project's containers, and leave everything else exactly where it
+     * is.
+     *
+     * One Compose invocation, and the argument that is not there is the point:
+     * no `--volumes`, no `--remove-orphans`, no label sweep afterwards. A
+     * teardown proves the machine is clean because the disk is what it is
+     * reclaiming; a stop reclaims memory, and the containers it leaves behind
+     * are what makes {@see boot()} a restart rather than a build.
+     *
+     * From inside the worktree when there still is one — so Compose finds the
+     * application's own file and the worktree's `.env` — and from wherever the
+     * run started when there is not, which is the case a registry entry whose
+     * directory somebody deleted leaves behind. Compose can act on a project by
+     * name either way; the directory only spares it the guess.
+     *
+     * A daemon nobody can reach short-circuits at the top, for the reason
+     * {@see teardown()} does it: `compose stop` against nothing would exit
+     * cleanly, and a clean exit would read as a worktree that gave its memory
+     * back.
+     */
+    public function stop(string $project, ?string $directory = null): bool
+    {
+        if (! $this->docker->isRunning()) {
+            $this->output->line(
+                "there is no Docker daemon answering on this machine, so nothing could be stopped for $project"
+            );
+
+            return false;
+        }
+
+        $this->output->line("stopping the containers of $project");
+
+        $stopped = $this->docker->compose(
+            ['-p', $project, 'stop'],
+            $directory !== null && is_dir($directory) ? $directory : null,
+        );
+
+        if ($stopped->succeeded()) {
+            return true;
+        }
+
+        $this->output->line("the Compose stop of $project exited $stopped->exitCode; what it said follows");
+        $this->output->write(rtrim($stopped->output)."\n");
+
+        return false;
     }
 
     /**

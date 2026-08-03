@@ -298,6 +298,44 @@ function startWorktreeRemove(array $arguments = ['feat/checkout']): Process
 
 /**
  * @param  list<string>  $arguments
+ */
+function worktreeStop(array $arguments = ['feat/checkout']): Process
+{
+    $process = startWorktreeStop($arguments);
+    $process->wait();
+
+    return $process;
+}
+
+/**
+ * @param  list<string>  $arguments
+ */
+function startWorktreeStop(array $arguments = ['feat/checkout']): Process
+{
+    return startWorktree(['stop', ...$arguments]);
+}
+
+/**
+ * @param  list<string>  $arguments
+ */
+function worktreeStart(array $arguments = ['feat/checkout']): Process
+{
+    $process = startWorktreeStart($arguments);
+    $process->wait();
+
+    return $process;
+}
+
+/**
+ * @param  list<string>  $arguments
+ */
+function startWorktreeStart(array $arguments = ['feat/checkout']): Process
+{
+    return startWorktree(['start', ...$arguments]);
+}
+
+/**
+ * @param  list<string>  $arguments
  * @param  array<string, string|false>  $env
  */
 function worktreePath(array $arguments = ['441'], ?string $cwd = null, array $env = []): Process

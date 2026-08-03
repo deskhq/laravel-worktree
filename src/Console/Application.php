@@ -50,6 +50,8 @@ final class Application
             ->register(new CreateCommand($output, new Emitter, $runner, $shutdown))
             ->register(new PathCommand($output, new Emitter, $runner))
             ->register(new ListCommand($output, new Emitter, $runner))
+            ->register(new StopCommand($output, $runner, $shutdown))
+            ->register(new StartCommand($output, $runner, $shutdown))
             ->register(new RemoveCommand($output, $runner, $shutdown))
             ->register(new ReapCommand($output, $runner, $shutdown, new Confirmation($output)))
             ->register(new UnlockCommand($output, $runner, $shutdown));
