@@ -287,3 +287,19 @@ it('lists every lock on the machine, whichever checkout took it', function () {
 it('lists nothing when no lock is held', function () {
     expect(locksIn($this->home)->taken())->toBe([]);
 });
+
+it('gives back a lock with a half-written record in it, rather than one nothing can rmdir', function () {
+    // The window between `Owner::writeInto()` writing its temporary file and
+    // renaming it into place. A `release()` that only unlinked `owner.json`
+    // would leave the directory there for ever — a lock outliving the run that
+    // held it, which is the failure this whole file is about.
+    $lock = lockAt($this->home.'/registry.lock');
+
+    $lock->acquire();
+
+    file_put_contents($this->home.'/registry.lock/.owner-abcdef.tmp', '{"pid": 4242');
+
+    $lock->release();
+
+    expect($this->home.'/registry.lock')->not->toBeDirectory();
+});

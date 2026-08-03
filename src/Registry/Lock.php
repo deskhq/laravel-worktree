@@ -143,7 +143,8 @@ final class Lock
 
         $this->held = false;
 
-        @unlink($this->path.'/'.Owner::File);
+        $this->empty($this->path);
+
         @rmdir($this->path);
     }
 
@@ -225,10 +226,27 @@ final class Lock
             return false;
         }
 
-        @unlink($aside.'/'.Owner::File);
+        $this->empty($aside);
+
         @rmdir($aside);
 
         return true;
+    }
+
+    /**
+     * Take everything out of a lock directory, whatever is in it.
+     *
+     * Everything rather than the record alone: a run interrupted between
+     * {@see Owner::writeInto()} writing its temporary file and renaming it into
+     * place would otherwise leave a file behind that keeps `rmdir` from ever
+     * succeeding — and a lock that outlives the run holding it is the failure
+     * this whole file is about.
+     */
+    private function empty(string $directory): void
+    {
+        foreach (array_diff(@scandir($directory) ?: [], ['.', '..']) as $entry) {
+            @unlink($directory.'/'.$entry);
+        }
     }
 
     /**
