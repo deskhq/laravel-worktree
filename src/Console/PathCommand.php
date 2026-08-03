@@ -3,7 +3,6 @@
 namespace DeskHQ\LaravelWorktree\Console;
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
-use DeskHQ\LaravelWorktree\Exceptions\UsageException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
 use DeskHQ\LaravelWorktree\Registry\Entry;
@@ -74,18 +73,10 @@ final readonly class PathCommand implements Command
 
     public function run(array $arguments, Anchor $anchor, Configuration $config): int
     {
-        $invocation = Arguments::parse($arguments, [self::Json]);
-        $name = $invocation->at(0);
+        $invocation = Arguments::parse($arguments, [self::Json], takes: Arity::name($this->name(), 'to look up'));
 
-        // An empty argument is `path "$ISSUE"` with nothing in `$ISSUE` — the
-        // mistake this command exists to make cheap, so it is answered as one.
-        if ($name === null || trim($name) === '') {
-            throw new UsageException('name the worktree to look up: an issue number, or a branch name');
-        }
-
-        if ($invocation->at(1) !== null) {
-            throw new UsageException('path takes one name; given '.implode(' ', $invocation->positional));
-        }
+        // There, and not blank: the arity above is what says so.
+        $name = (string) $invocation->at(0);
 
         // A key is a Compose project name, so an entry claimed by another
         // checkout is another checkout's worktree — and handing its path back

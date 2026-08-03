@@ -3,7 +3,6 @@
 namespace DeskHQ\LaravelWorktree\Console;
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
-use DeskHQ\LaravelWorktree\Exceptions\UsageException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Git\BaseRefs;
 use DeskHQ\LaravelWorktree\Git\Worktrees;
@@ -75,19 +74,10 @@ final readonly class RemoveCommand implements Command
 
     public function run(array $arguments, Anchor $anchor, Configuration $config): int
     {
-        $invocation = Arguments::parse($arguments);
-        $name = $invocation->at(0);
+        $invocation = Arguments::parse($arguments, [], takes: Arity::name($this->name(), 'to remove'));
 
-        // An empty argument is `remove "$ISSUE"` with nothing in `$ISSUE`, and
-        // is the same mistake as no argument at all — answered here rather than
-        // by the naming layer a moment later, which would call it operational.
-        if ($name === null || trim($name) === '') {
-            throw new UsageException('name the worktree to remove: an issue number, or a branch name');
-        }
-
-        if ($invocation->at(1) !== null) {
-            throw new UsageException('remove takes one name; given '.implode(' ', $invocation->positional));
-        }
+        // There, and not blank: the arity above is what says so.
+        $name = (string) $invocation->at(0);
 
         $fleet = Fleet::fromConfiguration($config, $anchor, $this->runner, $this->shutdown, $this->output);
         $identity = $fleet->identify($name);

@@ -3,7 +3,6 @@
 namespace DeskHQ\LaravelWorktree\Console;
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
-use DeskHQ\LaravelWorktree\Exceptions\UsageException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Naming\Identities;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
@@ -139,13 +138,11 @@ final readonly class ReapCommand implements Command
 
     public function run(array $arguments, Anchor $anchor, Configuration $config): int
     {
-        $invocation = Arguments::parse($arguments, [self::All, self::DryRun, self::Yes]);
-
-        if ($invocation->at(0) !== null) {
-            throw new UsageException(
-                'reap takes no arguments, only options; given '.implode(' ', $invocation->positional)
-            );
-        }
+        $invocation = Arguments::parse(
+            $arguments,
+            [self::All, self::DryRun, self::Yes],
+            takes: Arity::options($this->name()),
+        );
 
         $everywhere = $invocation->has(self::All);
         $fleet = Fleet::fromConfiguration($config, $anchor, $this->runner, $this->shutdown, $this->output);

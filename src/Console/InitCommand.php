@@ -7,7 +7,6 @@ use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Config\Derivation;
 use DeskHQ\LaravelWorktree\Config\Schema;
 use DeskHQ\LaravelWorktree\Config\Stencil;
-use DeskHQ\LaravelWorktree\Exceptions\UsageException;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 
@@ -104,13 +103,7 @@ final readonly class InitCommand implements Diagnostic
 
     private function generate(array $arguments, Anchor $anchor): int
     {
-        $invocation = Arguments::parse($arguments, [self::Force, self::DryRun]);
-
-        if ($invocation->at(0) !== null) {
-            throw new UsageException(
-                'init takes no arguments, only options; given '.implode(' ', $invocation->positional)
-            );
-        }
+        $invocation = Arguments::parse($arguments, [self::Force, self::DryRun], takes: Arity::options($this->name()));
 
         $path = $anchor->mainRoot.'/'.Schema::File;
         $dryRun = $invocation->has(self::DryRun);

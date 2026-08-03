@@ -7,7 +7,6 @@ use DeskHQ\LaravelWorktree\Compose\ComposeVersion;
 use DeskHQ\LaravelWorktree\Compose\Overlay;
 use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Config\EnvFile;
-use DeskHQ\LaravelWorktree\Exceptions\UsageException;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Git\Excludes;
@@ -89,18 +88,10 @@ final readonly class StartCommand implements Command
 
     public function run(array $arguments, Anchor $anchor, Configuration $config): int
     {
-        $invocation = Arguments::parse($arguments);
-        $name = $invocation->at(0);
+        $invocation = Arguments::parse($arguments, [], takes: Arity::name($this->name(), 'to start'));
 
-        // An empty argument is `start "$ISSUE"` with nothing in `$ISSUE`, and is
-        // the same mistake as no argument at all.
-        if ($name === null || trim($name) === '') {
-            throw new UsageException('name the worktree to start: an issue number, or a branch name');
-        }
-
-        if ($invocation->at(1) !== null) {
-            throw new UsageException('start takes one name; given '.implode(' ', $invocation->positional));
-        }
+        // There, and not blank: the arity above is what says so.
+        $name = (string) $invocation->at(0);
 
         $fleet = Fleet::fromConfiguration($config, $anchor, $this->runner, $this->shutdown, $this->output);
 

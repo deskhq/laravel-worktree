@@ -3,7 +3,6 @@
 namespace DeskHQ\LaravelWorktree\Console;
 
 use DeskHQ\LaravelWorktree\Config\Configuration;
-use DeskHQ\LaravelWorktree\Exceptions\UsageException;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Naming\Identities;
@@ -137,13 +136,7 @@ final readonly class ListCommand implements Command
 
     public function run(array $arguments, Anchor $anchor, Configuration $config): int
     {
-        $invocation = Arguments::parse($arguments, [self::All, self::Json]);
-
-        if ($invocation->at(0) !== null) {
-            throw new UsageException(
-                'list takes no arguments, only options; given '.implode(' ', $invocation->positional)
-            );
-        }
+        $invocation = Arguments::parse($arguments, [self::All, self::Json], takes: Arity::options($this->name()));
 
         $everywhere = $invocation->has(self::All);
         $registry = Registry::fromConfiguration($config);

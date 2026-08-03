@@ -72,13 +72,9 @@ final readonly class UnlockCommand implements Command
 
     public function run(array $arguments, Anchor $anchor, Configuration $config): int
     {
-        $invocation = Arguments::parse($arguments, [self::All, self::Force]);
+        $invocation = Arguments::parse($arguments, [self::All, self::Force], takes: Arity::optional($this->name()));
         $name = $invocation->at(0);
         $everything = $invocation->has(self::All);
-
-        if ($invocation->at(1) !== null) {
-            throw new UsageException('unlock takes one name; given '.implode(' ', $invocation->positional));
-        }
 
         if ($everything && $name !== null) {
             throw new UsageException("--all unlocks every lock on this machine, so it takes no name; given '$name'");
