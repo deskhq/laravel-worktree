@@ -39,7 +39,7 @@ it('lists every command it dispatches, with what each one takes', function () {
     $usage = worktree(['--help'])->getErrorOutput();
 
     expect($usage)
-        ->toContain('create <slug> [base] [--refresh] [--json]')
+        ->toContain('create <slug> [base] [--pr] [--refresh] [--json]')
         ->toContain('path <slug> [--json]')
         ->toContain('list [--all] [--json]')
         ->toContain('stop <slug> | --all | --all-except <slug> [--all-repos]')

@@ -17,6 +17,7 @@ use DeskHQ\LaravelWorktree\Git\Excludes;
 use DeskHQ\LaravelWorktree\Git\Worktrees;
 use DeskHQ\LaravelWorktree\Naming\Identities;
 use DeskHQ\LaravelWorktree\Naming\Identity;
+use DeskHQ\LaravelWorktree\Naming\PullRequests;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
 use DeskHQ\LaravelWorktree\Registry\Allocator;
 use DeskHQ\LaravelWorktree\Registry\Entry;
@@ -55,6 +56,32 @@ use DeskHQ\LaravelWorktree\Runtime\SailRuntime;
  * forgotten and made again, with a line saying so, because there is nothing
  * left to resume and the slot it holds would otherwise never come back.
  *
+ * ## `--pr`, the other thing worktrees are for (#59)
+ *
+ * ```bash
+ * cd "$(vendor/bin/worktree create --pr 441)"
+ * ```
+ *
+ * Every other create cuts a new branch from a base, which is right for picking
+ * up an issue and wrong for the case people reach for a worktree just as often:
+ * check somebody's pull request out, run it, and look at it. `--pr` names the
+ * worktree from the number and the pull request's title — exactly as a numeric
+ * slug is named, so it is found by number afterwards like any other — and
+ * attaches its **head branch** rather than forking from it. The slot, the
+ * ports, the overlay, the `.env`, the bootstrap and the three entry states above
+ * are unchanged.
+ *
+ * Two things about it are genuinely different. `gh` stops being optional, since
+ * the head branch is a fact only the forge holds ({@see PullRequests}). And the
+ * branch is read back off the worktree rather than predicted, because a pull
+ * request from a fork lands on a name gh chooses
+ * ({@see Worktrees::attachPullRequest()}).
+ *
+ * Re-entry deliberately fetches nothing. The branch belongs to somebody else
+ * and it moves; a create that quietly fast-forwarded — or worse, reset — a
+ * worktree with local commits in it would be far more expensive than one that
+ * left it stale.
+ *
  * ## Lock discipline
  *
  * The **per-worktree lock** is taken before anything is read and held until the
@@ -72,6 +99,9 @@ final readonly class CreateCommand implements Command
 {
     /** Run the whole recipe against a worktree that is already ready. */
     public const string Refresh = 'refresh';
+
+    /** Read the argument as a pull request number, and check its head out. */
+    public const string PullRequest = 'pr';
 
     /** Emit the worktree's registry entry instead of its path. */
     public const string Json = 'json';
@@ -91,21 +121,24 @@ final readonly class CreateCommand implements Command
     public function usage(): array
     {
         return [
-            '<slug> [base] [--refresh] [--json]',
+            '<slug> [base] [--pr] [--refresh] [--json]',
             'Create (or re-enter) an isolated worktree; prints its absolute path.',
         ];
     }
 
     public function run(array $arguments, Anchor $anchor, Configuration $config): int
     {
-        $invocation = Arguments::parse($arguments, [self::Refresh, self::Json]);
+        $invocation = Arguments::parse($arguments, [self::PullRequest, self::Refresh, self::Json]);
         $name = $invocation->at(0);
+        $pullRequest = $invocation->has(self::PullRequest);
 
         // An empty argument is the same mistake as no argument — `create "$ISSUE"`
         // with nothing in `$ISSUE` — and the same answer, rather than the
         // operational failure the naming layer would report a moment later.
         if ($name === null || trim($name) === '') {
-            throw new UsageException('name the worktree: an issue number, or a branch name');
+            throw new UsageException($pullRequest
+                ? 'name the pull request: its number'
+                : 'name the worktree: an issue number, or a branch name');
         }
 
         if ($invocation->at(2) !== null) {
@@ -115,13 +148,31 @@ final readonly class CreateCommand implements Command
             );
         }
 
-        $identity = Identities::fromConfiguration($config, $anchor, $this->runner, $this->output)->identify($name);
+        // A base is the one argument `--pr` cannot mean: the head branch is
+        // checked out as it stands rather than forked from anything, so a
+        // second argument here is somebody expecting the opposite of what they
+        // would get.
+        if ($pullRequest && $invocation->at(1) !== null) {
+            throw new UsageException(
+                "create --pr takes a pull request number and nothing else; a pull request's head is checked out, "
+                .'not forked from a base — given '.implode(' ', $invocation->positional)
+            );
+        }
+
+        $identities = Identities::fromConfiguration($config, $anchor, $this->runner, $this->output);
+        $identity = $pullRequest ? $identities->identifyPullRequest($name) : $identities->identify($name);
         $allocator = Allocator::fromConfiguration($config, $this->shutdown, $this->output);
 
         // Before anything is read, and given back only when this process ends.
         $allocator->locks()->worktree($identity->key)->acquire();
 
         $entry = $this->registered($allocator, $identity);
+
+        // Whether git has to be asked for anything at all beyond a verification:
+        // a worktree this checkout already has is entered again as it is, and
+        // that is the whole of what keeps `--pr` from moving somebody's branch
+        // under them on the way back in (#59).
+        $known = $entry !== null;
 
         if ($entry !== null) {
             $identity = $this->resumedAt($identity, $entry);
@@ -146,14 +197,26 @@ final readonly class CreateCommand implements Command
                 $identity->path,
             );
 
-            $outcome = $this->bootstrap(
-                $identity,
-                $entry,
-                $config,
-                $anchor,
-                $runtime,
-                $invocation->at(1) ?? $config->baseBranch,
-            );
+            // Git first, because there is nowhere to write anything until the
+            // directory exists — and, for a pull request from a fork, because
+            // the branch it lands on is not a name this run chose and the entry
+            // has to be told what it turned out to be.
+            if ($pullRequest && ! $known) {
+                [$identity, $entry] = $this->checkedOut(
+                    $allocator,
+                    $identity,
+                    $entry,
+                    $this->worktrees($anchor)->attachPullRequest($identity->path, $identity->name, $identity->branch),
+                );
+            } else {
+                $this->worktrees($anchor)->attach(
+                    $identity->path,
+                    $identity->branch,
+                    $invocation->at(1) ?? $config->baseBranch,
+                );
+            }
+
+            $outcome = $this->bootstrap($identity, $entry, $config, $anchor, $runtime);
         }
 
         $entry = $this->record($allocator, $entry, $outcome);
@@ -250,14 +313,44 @@ final readonly class CreateCommand implements Command
     }
 
     /**
+     * What the branch really turned out to be, on the identity and on the entry.
+     *
+     * Only `--pr` can get here with a surprise: gh checks a fork's head out
+     * under a name it decides — `<owner>/main`, when the head ref would collide
+     * with the default branch — and the registry, the `{{branch}}` placeholder
+     * and `remove`'s reassurance that the work outlives the directory all have
+     * to be talking about the branch the worktree is actually on.
+     *
+     * @return array{Identity, Entry}
+     */
+    private function checkedOut(Allocator $allocator, Identity $identity, Entry $entry, string $branch): array
+    {
+        if ($branch === $identity->branch) {
+            return [$identity, $entry];
+        }
+
+        $this->output->line(
+            "pull request $identity->name is checked out on '$branch' rather than '$identity->branch'; "
+            .'that is the branch the registry records'
+        );
+
+        $entry = $entry->withBranch($branch);
+
+        $allocator->record($entry);
+
+        return [new Identity($identity->name, $identity->slug, $identity->key, $branch, $identity->path), $entry];
+    }
+
+    /**
      * A worktree from wherever it currently is to ready.
      *
-     * Every position in this order is load-bearing. Git first, because there is
-     * nowhere to write anything until the directory exists. The `.env` before
-     * the overlay, because the overlay is what points `SAIL_FILES` at itself
-     * inside it. The overlay before the boot, because it is what decides which
-     * services come up. And `.worktree-ready` after the steps rather than
-     * before them, or a half-built worktree is one the next run re-enters.
+     * Every position in this order is load-bearing. The directory is already
+     * attached, because there is nowhere to write anything until it exists. The
+     * `.env` before the overlay, because the overlay is what points
+     * `SAIL_FILES` at itself inside it. The overlay before the boot, because it
+     * is what decides which services come up. And `.worktree-ready` after the
+     * steps rather than before them, or a half-built worktree is one the next
+     * run re-enters.
      *
      * The `.env` is written once and the overlay every time, and the asymmetry
      * is deliberate: the `.env` carries somebody's debugging edits and a resume
@@ -271,10 +364,7 @@ final readonly class CreateCommand implements Command
         Configuration $config,
         Anchor $anchor,
         Runtime $runtime,
-        ?string $base,
     ): Outcome {
-        $this->worktrees($anchor)->attach($identity->path, $identity->branch, $base);
-
         $environmentFile = $this->environmentFile($identity, $entry, $config, $anchor);
 
         $this->overlay()->generate($identity, $entry->ports, $config->compose, $environmentFile);

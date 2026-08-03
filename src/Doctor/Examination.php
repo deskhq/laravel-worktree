@@ -357,16 +357,22 @@ final class Examination
      * three days later; without `gh` the same run names the worktree `issue-441`
      * and everything else is identical ({@see Issues}). So this warns, and says
      * what the difference actually is.
+     *
+     * It stays a warning even though `create --pr` cannot run without `gh` at
+     * all: that flag is one way into one command, and a report that failed over
+     * it would be calling a machine unfit for a package it can run every other
+     * part of. The consequence is named rather than graded.
      */
     private function issues(): Finding
     {
         if (self::onPath('gh')) {
             return Finding::passed('gh', "gh is on this PATH, so 'worktree create 441' names the worktree from the "
-                ."issue's title — when it is logged in and online, which only the lookup itself can say");
+                ."issue's title, and 'worktree create --pr 441' has something to ask for a pull request's head "
+                .'branch — when it is logged in and online, which only the lookup itself can say');
         }
 
         return Finding::warned('gh', "gh is not on this PATH, so 'worktree create 441' names the worktree issue-441 "
-            .'rather than 441-fix-login; nothing else in this package needs it');
+            ."rather than 441-fix-login; the only thing here that cannot work without it is 'worktree create --pr'");
     }
 
     /**

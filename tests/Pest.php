@@ -278,6 +278,52 @@ function startWorktreeCreate(array $arguments = ['feat/checkout']): Process
 }
 
 /**
+ * A step that leaves one line behind every time it runs, which is how a case
+ * tells a re-entry from a bootstrap.
+ *
+ * @return array<string, string|bool>
+ */
+function countingStep(?string $sentinel = null): array
+{
+    $step = ['label' => 'Counting', 'host' => 'echo ran >> {{path}}/runs.log'];
+
+    return $sentinel === null ? $step : $step + ['sentinel' => $sentinel];
+}
+
+/**
+ * What `--json` put on stdout.
+ *
+ * @return array<string, mixed>
+ */
+function emitted(Process $process): array
+{
+    return json_decode(trim($process->getOutput()), true, flags: JSON_THROW_ON_ERROR);
+}
+
+/**
+ * One worktree's entry, as the registry on disk holds it.
+ *
+ * @return array<string, mixed>
+ */
+function registered(string $key = 'wt-desk-feat-checkout'): array
+{
+    $registry = json_decode((string) file_get_contents(test()->home.'/registry.json'), true, flags: JSON_THROW_ON_ERROR);
+
+    expect($registry)->toHaveKey($key);
+
+    return $registry[$key];
+}
+
+/**
+ * The branch the worktree at $path is on — the question every case about what
+ * git was asked to do ends in.
+ */
+function branchOf(string $path): string
+{
+    return trim(runGit($path, 'rev-parse', '--abbrev-ref', 'HEAD')->getOutput());
+}
+
+/**
  * @param  list<string>  $arguments
  */
 function worktreeRemove(array $arguments = ['feat/checkout']): Process

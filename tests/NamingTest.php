@@ -98,6 +98,80 @@ it('keeps what gh says about itself out of the diagnostics', function () {
     expect(diagnosticsIn($this->diagnostics))->not->toContain('gh auth login');
 });
 
+/**
+ * A pull request is named exactly as a numeric issue is — the number and the
+ * title — and differs in the one name that is not derived from the argument:
+ * the branch, which is the pull request's own head and which only `gh` knows
+ * (#59).
+ */
+it('names a pull request from its number and title, and takes its branch from the head ref', function () {
+    $identities = identitiesIn($this->repo, $this->home, $this->diagnostics);
+    stubGh($this->root, 'echo \'{"number":441,"title":"Fix login","headRefName":"fix-login"}\'');
+
+    $identity = $identities->identifyPullRequest('441');
+
+    expect($identity->name)->toBe('441')
+        ->and($identity->slug)->toBe('441-fix-login')
+        ->and($identity->key)->toBe('wt-the-desk-441-fix-login')
+        ->and($identity->branch)->toBe('fix-login')
+        ->and($identity->path)->toBe($this->root.'/the-desk-worktrees/441-fix-login')
+        ->and(ghLog($this->root))->toContain('pr view 441 --json number,title,headRefName');
+});
+
+it('names a pull request the number alone when gh gives it no title', function (string $script) {
+    $identities = identitiesIn($this->repo, $this->home, $this->diagnostics);
+    stubGh($this->root, $script);
+
+    $identity = $identities->identifyPullRequest('441');
+
+    // Still a slug the number finds afterwards, which is what a name derived
+    // from a number has to be ({@see Identities::locate()}).
+    expect($identity->slug)->toBe('441')
+        ->and($identity->key)->toBe('wt-the-desk-441')
+        ->and($identity->branch)->toBe('fix-login')
+        ->and(diagnosticsIn($this->diagnostics))->toContain('gh gave pull request 441 no title; the worktree will be 441');
+})->with([
+    'no title at all' => ['echo \'{"number":441,"headRefName":"fix-login"}\''],
+    'an empty title' => ['echo \'{"title":"   ","headRefName":"fix-login"}\''],
+]);
+
+/**
+ * The one place in this package where `gh` is a dependency rather than an
+ * enrichment: there is no name to fall back to when nothing can say which
+ * branch a pull request was opened from.
+ */
+it('refuses a pull request gh cannot answer for, naming what it needed', function (?string $script, string $said) {
+    $identities = identitiesIn($this->repo, $this->home, $this->diagnostics);
+
+    $script === null ? withoutGh($this->root) : stubGh($this->root, $script);
+
+    expect(fn () => $identities->identifyPullRequest('441'))->toThrow(WorktreeException::class, $said);
+})->with([
+    'absent' => [null, 'gh could not answer for pull request 441'],
+    'logged out' => ["printf 'gh auth login\n' >&2; exit 4", 'needs the GitHub CLI'],
+    'answering something that is not JSON' => ['echo not-json', 'without naming its head branch'],
+    'answering no head ref' => ['echo \'{"number":441,"title":"Fix login"}\'', 'without naming its head branch'],
+]);
+
+it('re-enters a pull request worktree on the branch the registry recorded', function () {
+    $identities = identitiesIn($this->repo, $this->home, $this->diagnostics);
+    stubGh($this->root, 'echo \'{"number":441,"title":"Fix login","headRefName":"main"}\'');
+
+    // What a pull request from a fork leaves behind: gh checked its head out
+    // under a name this run cannot reproduce, and the entry is the only record
+    // of it. Re-deriving `main` here would refuse the worktree, or worse, work.
+    $registered = $identities->identifyPullRequest('441');
+    register($this->home, $this->repo, new Identity(
+        $registered->name,
+        $registered->slug,
+        $registered->key,
+        'octocat/main',
+        $registered->path,
+    ));
+
+    expect($identities->identifyPullRequest('441')->branch)->toBe('octocat/main');
+});
+
 it('carries the wt- marker whatever the configuration says', function (array $config, string $key) {
     $identity = identitiesIn($this->repo, $this->home, $this->diagnostics, $config)->identify('feat/checkout');
 

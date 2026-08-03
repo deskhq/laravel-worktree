@@ -167,6 +167,30 @@ final readonly class Entry
     }
 
     /**
+     * The same entry, on the branch the worktree is really on.
+     *
+     * One caller: `create --pr`, where the branch is not a name this package
+     * chooses. A pull request from a fork is checked out by gh under a name gh
+     * decides, and an entry that recorded the head ref instead would be the
+     * registry disagreeing with the working tree about the one field that says
+     * where the work is.
+     */
+    public function withBranch(string $branch): self
+    {
+        return new self(
+            $this->key,
+            $this->slot,
+            $this->repo,
+            $this->slug,
+            $branch,
+            $this->path,
+            $this->ports,
+            $this->createdAt,
+            $this->degraded,
+        );
+    }
+
+    /**
      * Whether this entry belongs to the checkout at $repo.
      */
     public function belongsTo(string $repo): bool

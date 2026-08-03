@@ -458,6 +458,17 @@ it('omits the branch column when every key already ends with its branch', functi
 
     expect(headerOf($process))->toContain('BRANCH')
         ->and(rowsOf($process)[3])->toContain('feat/search');
+
+    // A pull request's worktree is the case the key alone cannot answer: it is
+    // named `441-fix-login` like any numeric slug and checked out on the head
+    // branch, `fix-login`, so the key ends with the branch while implying a
+    // different one (#59).
+    registryHolds(['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login', branch: 'fix-login')]);
+
+    $reviewing = worktreeListInTerminal();
+
+    expect(headerOf($reviewing))->toContain('BRANCH')
+        ->and(rowsOf($reviewing)[2])->toContain('fix-login');
 });
 
 /**

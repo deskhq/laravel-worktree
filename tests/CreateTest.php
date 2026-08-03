@@ -1,7 +1,5 @@
 <?php
 
-use Symfony\Component\Process\Process;
-
 /**
  * `create`, end to end through the real binary: real git, a real registry, real
  * locks, real subprocesses — driven against the fake `docker` and the fake
@@ -303,12 +301,14 @@ it('treats being called wrong as a usage error, not a failed run', function (arr
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())
         ->toContain($said)
-        ->toContain('usage: worktree create <slug> [base] [--refresh] [--json]');
+        ->toContain('usage: worktree create <slug> [base] [--pr] [--refresh] [--json]');
 })->with([
     'no name at all' => [[], 'name the worktree'],
     'a name with nothing in it' => [[''], 'name the worktree'],
-    'an option it does not have' => [['feat/checkout', '--refesh'], "unknown option '--refesh'; this command takes --refresh, --json"],
+    'an option it does not have' => [['feat/checkout', '--refesh'], "unknown option '--refesh'; this command takes --pr, --refresh, --json"],
     'more than a name and a base' => [['feat/checkout', 'main', 'extra'], 'create takes a name and, at most, a base to fork from'],
+    'no pull request number' => [['--pr'], 'name the pull request: its number'],
+    'a base for a pull request' => [['--pr', '441', 'main'], 'create --pr takes a pull request number and nothing else'],
 ]);
 
 /**
@@ -364,45 +364,3 @@ it('refuses to work in a worktree somebody has switched branches in', function (
         ->toContain("is on 'something-else', expected 'feat/checkout'")
         ->toContain('commits would land on the wrong branch');
 });
-
-/**
- * A step that leaves one line behind every time it runs, which is how these
- * cases tell a re-entry from a bootstrap.
- *
- * @return array<string, string|bool>
- */
-function countingStep(?string $sentinel = null): array
-{
-    $step = ['label' => 'Counting', 'host' => 'echo ran >> {{path}}/runs.log'];
-
-    return $sentinel === null ? $step : $step + ['sentinel' => $sentinel];
-}
-
-/**
- * What `--json` put on stdout.
- *
- * @return array<string, mixed>
- */
-function emitted(Process $process): array
-{
-    return json_decode(trim($process->getOutput()), true, flags: JSON_THROW_ON_ERROR);
-}
-
-/**
- * One worktree's entry, as the registry on disk holds it.
- *
- * @return array<string, mixed>
- */
-function registered(string $key = 'wt-desk-feat-checkout'): array
-{
-    $registry = json_decode((string) file_get_contents(test()->home.'/registry.json'), true, flags: JSON_THROW_ON_ERROR);
-
-    expect($registry)->toHaveKey($key);
-
-    return $registry[$key];
-}
-
-function branchOf(string $path): string
-{
-    return trim(runGit($path, 'rev-parse', '--abbrev-ref', 'HEAD')->getOutput());
-}
