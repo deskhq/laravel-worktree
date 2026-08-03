@@ -43,7 +43,9 @@ feat: reap command — orphan scan, human gate, and a re-check under the lock
 fix: stop reading the .env's own APP_ENV as one the shell exported
 ```
 
-`feat:` and `fix:` appear in the changelog; `chore:`, `docs:`, `test:`, `refactor:` and `ci:` do not. A breaking change needs `!` after the type, or a `BREAKING CHANGE:` footer. Pull requests are squash-merged, so **the pull request title is the commit message that lands** — it is the one that has to be conventional.
+`feat:`, `fix:`, `perf:`, `refactor:`, `docs:` and `deps:` appear in the changelog, each under a section of its own; `chore:`, `test:`, `ci:`, `build:` and `style:` do not — and a release of nothing but those is not proposed at all. `release-please-config.json` holds that list, and is the authority on it.
+
+The version is a separate question from the section: `feat:` makes the release a minor one, everything else in that list a patch, and `!` or a `BREAKING CHANGE:` footer a major. Pull requests are squash-merged, so **the pull request title is the commit message that lands** — it is the one that has to be conventional.
 
 Do not edit `CHANGELOG.md` or bump a version by hand. release-please owns both.
 
