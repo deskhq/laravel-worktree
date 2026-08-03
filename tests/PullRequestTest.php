@@ -320,18 +320,35 @@ function ghCalls(): array
 }
 
 /**
- * This machine's `PATH`, with every directory carrying a `gh` taken off it.
+ * This machine's `PATH`, with `gh` alone taken off it.
  *
  * The machine of somebody who never installed the GitHub CLI, rather than one
  * with nothing on its `PATH` at all: the run still needs `git`, and a case that
  * removed everything would be asserting about a failure it caused itself.
+ *
+ * Which is why this takes the binary off rather than the directory holding it:
+ * on a machine that installed `gh` from a package manager — as CI does — it
+ * sits in `/usr/bin` beside `git`, and dropping that directory takes git with
+ * it. Every name is linked into one directory in `PATH` order, so the first of
+ * a name still wins, as it did on the `PATH` this mirrors.
  */
 function pathWithoutGh(): string
 {
-    $directories = array_filter(
-        explode(':', (string) getenv('PATH')),
-        fn (string $directory): bool => $directory !== '' && ! is_executable($directory.'/gh'),
-    );
+    $mirror = test()->root.'/no-gh';
 
-    return implode(':', $directories);
+    is_dir($mirror) || mkdir($mirror, 0755, true);
+
+    foreach (explode(':', (string) getenv('PATH')) as $directory) {
+        foreach ((array) glob($directory.'/*') as $entry) {
+            $name = basename((string) $entry);
+
+            if ($name === 'gh' || file_exists($mirror.'/'.$name)) {
+                continue;
+            }
+
+            symlink((string) $entry, $mirror.'/'.$name);
+        }
+    }
+
+    return $mirror;
 }
