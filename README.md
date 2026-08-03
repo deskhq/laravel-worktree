@@ -78,6 +78,8 @@ The `chmod` is not optional: `vendor:publish` copies with the umask's permission
 cd "$(./vendor/bin/worktree create 441)"   # enter a worktree, making it if it is not there
 ./vendor/bin/worktree path 441             # ask where one is, and change nothing
 ./vendor/bin/worktree list
+./vendor/bin/worktree stop --all-except 441  # give the machine its memory back
+./vendor/bin/worktree start 441
 ./vendor/bin/worktree remove 441
 ./vendor/bin/worktree reap
 ./vendor/bin/worktree unlock 441
@@ -226,7 +228,7 @@ wt-the-desk-441-old        4     20040  20041  20042   20043  20044  441-old    
 | --- | --- |
 | `running` | every container this project has is up |
 | `partial` | some are, some are not — a boot that stopped partway, or a service that died under its siblings |
-| `stopped` | containers exist and none of them is up |
+| `stopped` | containers exist and none of them is up — what [`worktree stop`](#stopping-and-starting) leaves behind |
 | `unbooted` | the daemon has nothing for this project: never booted, or torn down |
 | `degraded` | the entry records bootstrap steps that failed and were [allowed to](#degrading-and-the-retry-that-follows) |
 | `gone` | the registry claims a worktree the disk has never heard of |
@@ -286,6 +288,41 @@ Which is what makes `reap` discoverable at the moment it is relevant, rather tha
 
 The scan is the one `reap` destroys by — a warning about something `reap` would not touch teaches people to ignore the warning, and the reverse is worse. So it is scoped identically: the `wt-` marker, narrowed to this repository unless `--all`, minus everything the registry claims from any checkout. It is silent when there is nothing to say, and silent when there is no daemon to ask: with nothing answering, a clean bill of health would be inferred rather than established.
 
+## Stopping and starting
+
+```bash
+worktree stop <slug> | --all | --all-except <slug> [--all-repos]
+worktree start <slug>
+```
+
+An idle worktree costs real memory: its own Postgres, its own Redis, its own app container, per worktree. Five of them — an ordinary number for the fleet this package is built for — is most of a laptop. Before these two the only way to get that memory back was `remove`, which also destroys the database, the sentinels, the `.env` you edited and the slot, for a branch you intend to work on tomorrow.
+
+`stop` stops the project's containers and **nothing else**: the volumes stay, the working tree stays, the sentinels stay, the registry entry stays, and the slot stays claimed. `start` brings the same services back up — the app service with the overlay's trimmed `depends_on` — without running a single bootstrap step, because a stopped worktree has already been through the recipe. Neither reaches stdout: there is no answer for a script to read, only an exit code, as with `remove`.
+
+The slot staying claimed is the deliberate part. Releasing it would let another worktree take those ports, and `start` would have nowhere to come back to — the database would still be there and the addresses in the `.env` would be somebody else's. A stopped worktree is one you intend to return to, and holding a slot costs nothing but a number.
+
+`list` reports one as `stopped`, so a state this command produces is a state the table can show.
+
+### The one you will actually type
+
+```bash
+worktree stop --all-except 441
+```
+
+Because the real workflow is not "stop this one", it is *"I am working on this one now"* — an agent picking up a task wants the other nine idle. `--all` is the same run without an exception, and both are scoped to this checkout's worktrees unless `--all-repos` widens them to every worktree on the machine, which is the scope `list --all` and `reap --all` mean.
+
+It is spelled `--all-repos` rather than `--all` because `--all` is not free here: `list` and `reap` have a subject already and use `--all` to widen it, while `stop` has no default subject, so `--all` has to *be* the subject. Leaving this checkout still takes an explicit flag, which is the part of `reap`'s care about acting on things you cannot see that applies to a command that destroys nothing.
+
+The worktree named by `--all-except` has to be one the registry holds, and a name nothing holds is refused rather than treated as an empty exception: a typo there would stop everything *including* the worktree it was typed to protect.
+
+### What `start` refuses
+
+`start` is not a second, weaker `create`. A worktree with no `.worktree-ready` has never finished a bootstrap, and starting its containers would leave you looking at an application with no dependencies installed; an entry whose directory is gone has nothing to start at all. Both are refused, and both name `create` — which resumes the first on the same slot with every finished step skipped, and makes the second again, the branch having never been touched.
+
+It also writes `compose.worktree.yaml` again before booting. That file carries nothing but your configuration, and it can be out of date by the time a stopped worktree comes back — an edited `config/worktree.php`, a `keep_services` somebody added. Regenerating it is cheap and is what `create` does on every run.
+
+Both commands take the same per-worktree lock `create` and `remove` take, since stopping a project halfway through the bootstrap that is starting it is precisely the race that lock exists to prevent. A bulk `stop` takes them one key at a time and gives each back before the next, so stopping a machineful does not block every unrelated command for the duration.
+
 ## Removing
 
 ```bash
@@ -293,6 +330,8 @@ worktree remove <slug>
 ```
 
 Containers, volumes, the worktree directory and the slot. **The branch stays** — the work is the point and the infrastructure is disposable, so `git worktree remove` runs with `--force` and nothing in this command touches a ref. Nothing reaches stdout either: there is no answer for a script to read, only an exit code.
+
+This is the one that destroys things. If what you want is the memory back from a worktree you intend to return to, [`stop`](#stopping-and-starting) is the command — it keeps the database, the `.env` and the slot.
 
 The order, and every position in it is load-bearing:
 
@@ -728,14 +767,17 @@ What brings a worktree up and what takes it down again sits behind one interface
 ```php
 interface Runtime
 {
-    public function boot(Identity $worktree, string $environmentFile): void;
-    public function teardown(Identity $worktree): TeardownResult;
+    public function boot(Identity $worktree, string $environmentFile, ?string $halted = null, ?string $remedy = null): void;
+    public function stop(string $project, ?string $directory = null): bool;
+    public function teardown(string $project, ?string $directory = null): TeardownResult;
     public function allocatesPorts(): bool;
     public function shell(): Shell;
 }
 ```
 
-Without containers there are no host ports to collide over, nothing to tear down and nothing to reap — so a non-Sail mode is a genuinely different product, deferred behind this seam rather than half-built inside the Sail one. `allocatesPorts()` is the question asked before anything reaches for a slot. `shell()` is the fourth method because what a `sail:` step has to be told before it will behave is the runtime's knowledge, not the pipeline's.
+Without containers there are no host ports to collide over, nothing to tear down and nothing to reap — so a non-Sail mode is a genuinely different product, deferred behind this seam rather than half-built inside the Sail one. `allocatesPorts()` is the question asked before anything reaches for a slot. `shell()` is there because what a `sail:` step has to be told before it will behave is the runtime's knowledge, not the pipeline's.
+
+`stop()` is the half `teardown()` is not: teardown is how a worktree stops existing, stop is how it stops *costing* anything. Both take a project name rather than an `Identity`, because a bulk `stop` works from registry entries and `reap` has nothing but a label on a daemon; the directory is only ever an optimisation. And `boot()` carries the two clauses its failures end with, because the same call is made by `create` and by `start` and the answer to "what now?" is different — an interrupted bootstrap is resumed by `create`, while a stopped worktree that would not come back is retried by `start`, and `create` would re-enter it without booting anything.
 
 **Sail is a soft dependency.** It is detected, never required, and it is not in this package's `require`. An application without it gets a message naming the fix rather than a stack trace three minutes into a bootstrap.
 

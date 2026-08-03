@@ -42,6 +42,8 @@ it('lists every command it dispatches, with what each one takes', function () {
         ->toContain('create <slug> [base] [--refresh] [--json]')
         ->toContain('path <slug> [--json]')
         ->toContain('list [--all] [--json]')
+        ->toContain('stop <slug> | --all | --all-except <slug> [--all-repos]')
+        ->toContain('start <slug>')
         ->toContain('remove <slug>')
         ->toContain('reap [--all] [--dry-run] [--yes]');
 });
