@@ -3,6 +3,8 @@
 namespace DeskHQ\LaravelWorktree\Process;
 
 use DeskHQ\LaravelWorktree\Console\Output;
+use DeskHQ\LaravelWorktree\Exceptions\TimedOutException;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Exception\RuntimeException;
 use Symfony\Component\Process\Process;
 
@@ -19,9 +21,21 @@ use Symfony\Component\Process\Process;
  * lands in {@see Output}, which is stderr. A step cannot reach stdout because
  * it is never handed to one.
  *
- * Timeouts are disabled throughout: bootstrap steps legitimately run for
- * minutes (Composer, npm, image pulls) and killing them mid-way is worse than
- * waiting.
+ * ## Timeouts are per call, and off unless one is asked for
+ *
+ * Symfony's default of 60s is wrong for everything here — a `composer install`
+ * or a first image pull legitimately runs for minutes — so no process this
+ * class starts carries one it was not given. But *unbounded* is wrong too: a
+ * registry that accepts the connection and then stalls, or a Docker daemon that
+ * is wedged rather than down, is a hang with nothing on screen to describe it,
+ * and it holds the worktree's lock for as long as it lasts.
+ *
+ * So the limit belongs to the call rather than to this class: what is a
+ * pathological wait for `sail up -d` is not one for `npm ci`, and a git query
+ * that answers in milliseconds wants no ceiling at all. A call that exceeds
+ * the one it was given has its process killed, and gets a
+ * {@see TimedOutException} naming the limit — which the caller turns into a
+ * failure in its own terms.
  */
 final readonly class ProcessRunner
 {
@@ -32,12 +46,15 @@ final readonly class ProcessRunner
      *
      * @param  list<string>  $command
      * @param  array<string, string>  $env
+     * @param  int|null  $timeout  Seconds it may run for; null is no ceiling.
+     *
+     * @throws TimedOutException when it ran past $timeout.
      */
-    public function run(array $command, ?string $cwd = null, array $env = []): int
+    public function run(array $command, ?string $cwd = null, array $env = [], ?int $timeout = null): int
     {
-        $process = $this->process($command, $cwd, $env);
+        $process = $this->process($command, $cwd, $env, $timeout);
 
-        return $process->run(function (string $type, string $chunk): void {
+        return $this->await($process, function (string $type, string $chunk): void {
             $this->output->write($chunk);
         });
     }
@@ -47,8 +64,9 @@ final readonly class ProcessRunner
      *
      * Steps are strings in a config file — `artisan migrate --force`, `npm ci &&
      * npm run build` — so they get a shell, and the shape is `laravel/sail`'s
-     * own `runCommands()` (MIT): a shell command line, no timeout, and a TTY
-     * when there is one to be had.
+     * own `runCommands()` (MIT): a shell command line, and a TTY when there is
+     * one to be had. The timeout is the one departure, and it is the step's own
+     * rather than Sail's absent one.
      *
      * The TTY is what makes Composer, npm and artisan print progress rather than
      * a wall of scrollback, and it does not cost the stdout contract: Symfony
@@ -59,11 +77,14 @@ final readonly class ProcessRunner
      * into {@see Output}. Either way a step never reaches the caller's stdout.
      *
      * @param  array<string, string>  $env  Added to the environment the step inherits.
+     * @param  int|null  $timeout  Seconds it may run for; null is no ceiling.
+     *
+     * @throws TimedOutException when it ran past $timeout.
      */
-    public function shell(string $command, string $cwd, array $env = []): int
+    public function shell(string $command, string $cwd, array $env = [], ?int $timeout = null): int
     {
         $process = Process::fromShellCommandline($command, $cwd, $env === [] ? null : $env);
-        $process->setTimeout(null);
+        $process->setTimeout($timeout);
 
         if (Process::isTtySupported()) {
             try {
@@ -74,7 +95,7 @@ final readonly class ProcessRunner
             }
         }
 
-        return $process->run(function (string $type, string $chunk): void {
+        return $this->await($process, function (string $type, string $chunk): void {
             $this->output->write($chunk);
         });
     }
@@ -205,13 +226,35 @@ final readonly class ProcessRunner
     }
 
     /**
+     * Wait for a process that was given a limit, in the one vocabulary the rest
+     * of this package speaks.
+     *
+     * Symfony has already killed it by the time this catches: `checkTimeout()`
+     * stops the process — SIGTERM, then SIGKILL — before it throws, and a shell
+     * command line is started under `exec`, so the signal reaches the command
+     * itself rather than a `sh` wrapping it.
+     *
+     * @param  callable(string, string): void  $onOutput
+     *
+     * @throws TimedOutException
+     */
+    private function await(Process $process, callable $onOutput): int
+    {
+        try {
+            return $process->run($onOutput);
+        } catch (ProcessTimedOutException $timedOut) {
+            throw new TimedOutException((int) $timedOut->getExceededTimeout(), $process->getCommandLine());
+        }
+    }
+
+    /**
      * @param  list<string>  $command
      * @param  array<string, string>  $env
      */
-    private function process(array $command, ?string $cwd, array $env = []): Process
+    private function process(array $command, ?string $cwd, array $env = [], ?int $timeout = null): Process
     {
         $process = new Process($command, $cwd, $env === [] ? null : $env);
-        $process->setTimeout(null);
+        $process->setTimeout($timeout);
 
         return $process;
     }

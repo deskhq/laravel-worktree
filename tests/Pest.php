@@ -166,8 +166,10 @@ function worktree(array $arguments = [], ?string $cwd = null, array $env = [], f
  * A started one, for the cases that look at a run while it is still working.
  *
  * The timeout is generous because those runs are deliberately held mid-pipeline
- * and a loaded machine should not turn that into a failure. The binary itself
- * never times a bootstrap out: Composer, npm and image pulls take minutes.
+ * and a loaded machine should not turn that into a failure. It is this test's
+ * own patience, and unrelated to the limits the binary runs its own steps
+ * under — `step_timeout` is half an hour, because Composer, npm and image
+ * pulls take minutes.
  *
  * @param  list<string>  $arguments
  * @param  array<string, string|false>  $env

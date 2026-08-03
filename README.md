@@ -306,6 +306,8 @@ Everything is optional. A repository with no `config/worktree.php` runs on the d
 | `repo_slug` | the main working tree's directory name | Names this repository in registry keys and project names |
 | `env` | `[]` | Variables written into a new worktree's `.env` |
 | `compose` | `[]` | `keep_services` and `port_overrides` for the generated Compose overlay |
+| `step_timeout` | `1800` | Seconds a bootstrap step may run for before it is killed; `null` for no ceiling |
+| `boot_timeout` | `3600` | Seconds the runtime's own boot may take, likewise |
 | `steps` | `[]` | The bootstrap recipe |
 
 A port is `port_base + slot * port_stride + the port's index in ports`, so the defaults cover ports 20000–20499. An unknown or misspelled key is an error naming it, never a silent no-op.
@@ -652,6 +654,7 @@ The recipe is `steps` in `config/worktree.php`, run in the order it is declared.
 | `when` | `missing:<path>`, `exists:<path>` or `env_empty:<KEY>` |
 | `allow_failure` | a failure does not abort the bootstrap |
 | `degrade` | re-printed at the very end when this step failed |
+| `timeout` | seconds this step may run for; `null` for no ceiling, `step_timeout` when unset |
 
 Every string takes the `{{path}}`, `{{slug}}`, `{{project}}`, `{{branch}}`, `{{uid}}`, `{{gid}}` and `{{port.*}}` placeholders, and the **whole recipe is resolved before the first step starts** — a typo in the last step is an error now, not after eleven minutes of Composer and npm.
 
@@ -681,6 +684,21 @@ Re-entering this worktree retries just those; nothing else runs again.
 ```
 
 Degraded steps are recorded in the worktree's registry entry, and re-entering the worktree runs those and only those — a step usually degrades because a registry was unreachable or a download timed out, and the next run is the natural moment to try again. A step that failed *without* `allow_failure` stops the bootstrap where it stands, names its exit code, and leaves the worktree resumable.
+
+### A step that never returns is a step that failed
+
+Every step runs under a limit — its own `timeout`, or `step_timeout`, which is **30 minutes** by default. One that runs past it is killed, and reported by name with the limit it exceeded:
+
+```
+Installing node modules timed out after 900s; the bootstrap stopped
+there — fix it, then 'worktree create 441' picks up where it left off
+```
+
+Distinct from a non-zero exit, deliberately: `failed (exit 137)` and `timed out after 900s` are the same outcome and completely different problems. Beyond the message nothing is special about a timeout — `allow_failure` and `degrade` mean exactly what they mean for any other failure, and a timed-out step without `allow_failure` leaves the worktree resumable like any other.
+
+The default is a number rather than `null` on purpose. Every process this package starts used to run unbounded, which is defensible for `composer install` and indefensible for the ordinary hangs: `npm ci` against a registry that accepts the connection and then stalls, or a Docker daemon that is wedged rather than down — a stopped one fails fast, a hung one does not. And the **per-worktree lock is held for the whole run**, so a hung step does not just hang its own run; every later entry into that worktree queues behind it, each paying its own ten-minute wait. `null` would have preserved that and helped only the people who went looking for the key.
+
+`boot_timeout` covers what happens before the first step — resolving a `vendor/` through the throwaway Composer container, then `sail up -d` — and is separate, and more generous, because that is the package's own call rather than the application's and it may be pulling and building images. Teardown is deliberately unbounded: `remove` and `reap` are reached for when a worktree is *already* in a bad state, and a teardown cut short leaves containers and volumes behind with nothing left to name them.
 
 ### Where the DSL stops
 

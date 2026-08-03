@@ -16,6 +16,7 @@ it('runs on documented defaults when the repository ships no config file', funct
         'repoSlug' => null,
         'env' => [],
         'compose' => ['keep_services' => [], 'port_overrides' => []],
+        'bootTimeout' => 3600,
         'steps' => [],
     ]);
 
@@ -54,6 +55,26 @@ it('reads what the repository actually says', function () {
     ]);
 
     deleteDirectory($root);
+});
+
+/**
+ * Every step leaves the validator carrying the limit it will be run under,
+ * declared or defaulted, so the recipe the pipeline is handed is already
+ * complete — the same reason placeholders are resolved before the first step
+ * starts rather than as each one comes up.
+ */
+it('gives every step a limit, and leaves a step that named its own alone', function () {
+    $config = Configuration::fromArray(['step_timeout' => 900, 'steps' => [
+        ['host' => 'npm ci'],
+        ['host' => 'bin/worktree-playwright', 'timeout' => 300],
+        // The one way to ask for what every step used to get.
+        ['host' => 'bin/restore-the-snapshot', 'timeout' => null],
+    ]]);
+
+    expect(array_map(fn (array $step): ?int => $step['timeout'], $config->steps))->toBe([900, 300, null])
+        // And a repository that wants nothing bounded can still say so.
+        ->and(Configuration::fromArray(['step_timeout' => null, 'steps' => [['host' => 'npm ci']]])->steps[0]['timeout'])
+        ->toBeNull();
 });
 
 it('resolves env() through the .env of the main checkout', function () {
@@ -193,6 +214,21 @@ it('refuses a config it cannot act on', function (array $config, string $message
     'a step that runs two things' => [['steps' => [['host' => 'true', 'sail' => 'true']]], 'steps.0 names host and sail, but a step runs one command; use one of host, sail, sail_root'],
     'a condition the DSL cannot express' => [['steps' => [['host' => 'true', 'when' => 'shell_fails:probe']]], "steps.0.when must be one of missing:, exists:, env_empty:, 'shell_fails:probe' given"],
     'an allow_failure that is not a boolean' => [['steps' => [['host' => 'true', 'allow_failure' => 'yes']]], "steps.0.allow_failure must be true or false, 'yes' given"],
+    'a step timeout that is not a number of seconds' => [
+        ['steps' => [['host' => 'npm ci', 'timeout' => 'a while']]],
+        "steps.0.timeout must be a whole number of seconds, or null for no limit; 'a while' given",
+    ],
+    // Zero is the shape of "no limit" somebody guessed at, and it would
+    // otherwise mean a step that is killed before it has started.
+    'a step timeout of zero' => [
+        ['steps' => [['host' => 'npm ci', 'timeout' => 0]]],
+        'steps.0.timeout must be at least 1 second, or null for no limit; 0 given',
+    ],
+    'a package default that is not a number of seconds' => [
+        ['step_timeout' => 'half an hour'],
+        "step_timeout must be a whole number of seconds, or null for no limit; 'half an hour' given",
+    ],
+    'a negative boot timeout' => [['boot_timeout' => -1], 'boot_timeout must be at least 1 second, or null for no limit; -1 given'],
     // A notice on a step that aborts the bootstrap is a notice nothing ever
     // prints — written, read as covered, and silent.
     'a degrade notice nothing would reach' => [

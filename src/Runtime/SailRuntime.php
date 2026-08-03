@@ -8,7 +8,9 @@ use DeskHQ\LaravelWorktree\Bootstrap\Shell;
 use DeskHQ\LaravelWorktree\Compose\AppService;
 use DeskHQ\LaravelWorktree\Config\Assignments;
 use DeskHQ\LaravelWorktree\Config\Env;
+use DeskHQ\LaravelWorktree\Config\Schema;
 use DeskHQ\LaravelWorktree\Console\Output;
+use DeskHQ\LaravelWorktree\Exceptions\TimedOutException;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Naming\Identity;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
@@ -62,13 +64,20 @@ final readonly class SailRuntime implements Runtime
         private ProcessRunner $runner,
         private Docker $docker,
         private string $composerImage = self::DefaultComposerImage,
+        /** How long {@see boot()} may take; null is no ceiling. See {@see Schema::DefaultBootTimeout}. */
+        private ?int $bootTimeout = Schema::DefaultBootTimeout,
     ) {}
 
     /**
      * The runtime as the binary wires it: the machine's real Docker, and
      * whichever Composer image `WORKTREE_COMPOSER_IMAGE` names.
+     *
+     * $bootTimeout is the repository's `boot_timeout`, and is left at the
+     * package default by the two callers that only ever tear down — `remove`
+     * and `reap` reach for a runtime to take a project off the machine, never
+     * to bring one up.
      */
-    public static function for(Output $output, ProcessRunner $runner): self
+    public static function for(Output $output, ProcessRunner $runner, ?int $bootTimeout = Schema::DefaultBootTimeout): self
     {
         $image = Env::get(self::ComposerImageVariable);
 
@@ -77,6 +86,7 @@ final readonly class SailRuntime implements Runtime
             $runner,
             Docker::for($runner, $output),
             is_string($image) && $image !== '' ? $image : self::DefaultComposerImage,
+            $bootTimeout,
         );
     }
 
@@ -91,20 +101,35 @@ final readonly class SailRuntime implements Runtime
     /**
      * Get the worktree from an attached directory to a running app service.
      *
-     * @throws WorktreeException when Sail cannot be obtained, or refuses to start the service.
+     * Both halves are bounded by `boot_timeout`, and for the same reason the
+     * steps after them are bounded: a proxy that never answers the throwaway
+     * Composer container, or a Docker daemon that is wedged rather than down —
+     * a stopped daemon fails fast, a hung one does not — would otherwise hold
+     * this worktree's lock for as long as it lasted, with nothing on screen to
+     * tell it from an image that is genuinely still building.
+     *
+     * @throws WorktreeException when Sail cannot be obtained, when either half ran past `boot_timeout`, or when the service refuses to start.
      */
     public function boot(Identity $worktree, string $environmentFile): void
     {
-        $this->obtainSail($worktree);
-
         $service = AppService::in(is_file($environmentFile) ? Assignments::read($environmentFile) : Assignments::of(''));
 
-        $this->output->line("starting $service (building the image on the first run can take a while)");
+        try {
+            $this->obtainSail($worktree);
 
-        // Without SAIL_SKIP_CHECKS, deliberately: this is the call that makes
-        // the app service exist, and the checks it runs are the ones that decide
-        // whether a later `sail exec` has anything to exec into. See shell().
-        $exitCode = $this->runner->run([Action::Binary, 'up', '-d', $service], $worktree->path);
+            $this->output->line("starting $service (building the image on the first run can take a while)");
+
+            // Without SAIL_SKIP_CHECKS, deliberately: this is the call that makes
+            // the app service exist, and the checks it runs are the ones that decide
+            // whether a later `sail exec` has anything to exec into. See shell().
+            $exitCode = $this->runner->run([Action::Binary, 'up', '-d', $service], $worktree->path, timeout: $this->bootTimeout);
+        } catch (TimedOutException $timedOut) {
+            throw new WorktreeException(
+                "'$timedOut->commandLine' was still running after {$timedOut->seconds}s in $worktree->path and was killed; "
+                .'the bootstrap stopped there — fix it, or raise boot_timeout in '.Schema::File.', then '
+                ."'worktree create $worktree->name' picks up where it left off"
+            );
+        }
 
         if ($exitCode !== 0) {
             throw new WorktreeException(
@@ -237,7 +262,7 @@ final readonly class SailRuntime implements Runtime
             $this->composerImage,
             'composer', 'install', '--no-interaction', '--prefer-dist', '--no-progress',
             '--ignore-platform-reqs', '--no-scripts',
-        ]);
+        ], timeout: $this->bootTimeout);
 
         if (is_file($sail)) {
             return;

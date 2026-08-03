@@ -1,6 +1,7 @@
 <?php
 
 use DeskHQ\LaravelWorktree\Bootstrap\Action;
+use DeskHQ\LaravelWorktree\Config\Schema;
 use DeskHQ\LaravelWorktree\Console\Output;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Naming\Identity;
@@ -88,6 +89,22 @@ it('says what to do when the bootstrap container leaves no Sail behind', functio
         ->toThrow(WorktreeException::class, 'composer require laravel/sail --dev');
 });
 
+/**
+ * `boot()` carries a limit of its own rather than the step default, because it
+ * is the package's own call and the slowest thing in a run — and because a
+ * Docker daemon that is wedged rather than down is exactly as likely as a hung
+ * step. A stopped daemon fails fast; a hung one does not.
+ */
+it('kills a boot that ran past boot_timeout, and leaves the worktree resumable', function () {
+    fakeSail($this->path);
+    file_put_contents($this->path.'/vendor/bin/sail', "#!/bin/sh\nexec sleep 30\n");
+
+    expect(fn () => runtime(bootTimeout: 1)->boot($this->identity, $this->path.'/.env'))
+        ->toThrow(WorktreeException::class, "was still running after 1s in $this->path and was killed")
+        ->and(fn () => runtime(bootTimeout: 1)->boot($this->identity, $this->path.'/.env'))
+        ->toThrow(WorktreeException::class, "raise boot_timeout in config/worktree.php, then 'worktree create 441' picks up where it left off");
+});
+
 it('lets a refusal to start the app service stop the run, resumably', function () {
     fakeSail($this->path, exitCode: 1);
 
@@ -113,7 +130,7 @@ it('runs `up` with Sail\'s own checks in place, and every step after it without 
     $runtime = runtime();
 
     $runtime->boot($this->identity, $this->path.'/.env');
-    $runtime->shell()->run(Action::Binary.' artisan migrate --force', $this->path);
+    $runtime->shell()->run(Action::Binary.' artisan migrate --force', $this->path, timeout: null);
 
     expect(sailInvocations())->toBe(['up -d laravel.test', 'artisan migrate --force'])
         ->and(sailEnvironment())->toBe(['unset', '1']);
@@ -247,13 +264,13 @@ it('reaches the same Sail from the pipeline and from the runtime', function () {
  * @param  string|null  $docker  A fake docker; one that answers everything is made when none is given.
  * @param  bool  $producesSail  Whether the bootstrap container leaves a `vendor/bin/sail` behind.
  */
-function runtime(?string $docker = null, bool $producesSail = true): SailRuntime
+function runtime(?string $docker = null, bool $producesSail = true, ?int $bootTimeout = Schema::DefaultBootTimeout): SailRuntime
 {
     $output = new Output(test()->diagnostics);
     $runner = new ProcessRunner($output);
     $binary = $docker ?? fakeDockerBinary(test()->root, producesSail: $producesSail);
 
-    return new SailRuntime($output, $runner, new Docker($runner, $output, $binary));
+    return new SailRuntime($output, $runner, new Docker($runner, $output, $binary), bootTimeout: $bootTimeout);
 }
 
 /**

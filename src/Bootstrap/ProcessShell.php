@@ -24,8 +24,8 @@ final readonly class ProcessShell implements Shell
         private array $environment = [],
     ) {}
 
-    public function run(string $commandLine, string $path): int
+    public function run(string $commandLine, string $path, ?int $timeout): int
     {
-        return $this->runner->shell($commandLine, $path, $this->environment);
+        return $this->runner->shell($commandLine, $path, $this->environment, $timeout);
     }
 }

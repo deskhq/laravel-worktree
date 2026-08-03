@@ -2,6 +2,8 @@
 
 namespace DeskHQ\LaravelWorktree\Bootstrap;
 
+use DeskHQ\LaravelWorktree\Exceptions\TimedOutException;
+
 /**
  * Where a step's command line actually goes.
  *
@@ -15,6 +17,15 @@ interface Shell
     /**
      * Run $commandLine with $path as its working directory, and hand back its
      * exit code. Everything it writes belongs in the run's diagnostics.
+     *
+     * $timeout is declared rather than defaulted, because a shell with no
+     * opinion about how long a step may run for is how a hung `npm ci` came to
+     * hold a worktree's lock indefinitely. `null` still means "no ceiling" —
+     * but it has to be said.
+     *
+     * @param  int|null  $timeout  Seconds the step may run for; null is no ceiling.
+     *
+     * @throws TimedOutException when it ran past $timeout, having been killed.
      */
-    public function run(string $commandLine, string $path): int;
+    public function run(string $commandLine, string $path, ?int $timeout): int;
 }
