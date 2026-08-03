@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0](https://github.com/deskhq/laravel-worktree/compare/v0.4.0...v1.0.0) (2026-08-03)
+
+
+### Features
+
+* a worktree for reviewing a pull request, not for starting one ([#71](https://github.com/deskhq/laravel-worktree/issues/71)) ([a84aa28](https://github.com/deskhq/laravel-worktree/commit/a84aa288429c4f6a2074ebadeed443f183c64e07))
+
 ## [0.4.0](https://github.com/deskhq/laravel-worktree/compare/v0.3.0...v0.4.0) (2026-08-03)
 
 
