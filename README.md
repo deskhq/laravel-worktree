@@ -26,7 +26,7 @@ This is the first thing worth understanding, because it is otherwise the first i
 
 The implementation is a binary — `vendor/bin/worktree` — and not `php artisan worktree:create`. Under Sail, artisan runs **inside the app container**, and from in there every single thing this package needs is unreachable: there is no Docker socket to create containers with, no host git to add a worktree to, no sibling worktrees directory, and no way to bind a host port. A worktree also has no `vendor/` at the moment it is created, so there is no application to boot and no artisan to run in the first place.
 
-`php artisan worktree:{create,list,remove,reap,unlock}` do exist, as a facade. Called from inside the container they refuse and tell you what to run instead:
+`php artisan worktree:{create,path,list,remove,reap,unlock}` do exist, as a facade. Called from inside the container they refuse and tell you what to run instead:
 
 ```
 worktree must run on the host, not inside the container.
@@ -75,14 +75,17 @@ The `chmod` is not optional: `vendor:publish` copies with the umask's permission
 ## Usage
 
 ```bash
-cd "$(./vendor/bin/worktree create 441)"
+cd "$(./vendor/bin/worktree create 441)"   # enter a worktree, making it if it is not there
+./vendor/bin/worktree path 441             # ask where one is, and change nothing
 ./vendor/bin/worktree list
 ./vendor/bin/worktree remove 441
 ./vendor/bin/worktree reap
 ./vendor/bin/worktree unlock 441
 ```
 
-Only machine-readable output — the path from `create`, the table from `list` — reaches stdout. Every diagnostic, and the whole output of every subprocess it runs, goes to stderr, so `cd "$(...)"` keeps working on a run that also produced megabytes of Composer and npm output.
+The first two lines look alike and are not. `create` is the **write path**: it takes the worktree's lock for the whole run, retries whatever is recorded as degraded, verifies `HEAD`, and bootstraps a worktree for a slug it has never seen — which is right when you are entering one, and wrong when a script only wanted the directory. `path` is the read: no lock, no Docker, no `gh`, nothing written, and a typo'd slug is an exit code rather than five minutes of Docker and a slot. Scripts and shell functions want `path`.
+
+Only machine-readable output — the path from `create` and from `path`, the table from `list` — reaches stdout. Every diagnostic, and the whole output of every subprocess it runs, goes to stderr, so `cd "$(...)"` keeps working on a run that also produced megabytes of Composer and npm output.
 
 Exit codes: `0` success, `1` operational failure, `64` usage error. An interrupted run (`130`) or a terminated one (`143`) still releases everything it was holding.
 
@@ -135,6 +138,35 @@ A registry entry whose directory somebody has deleted by hand is none of the thr
 The per-worktree lock is taken before anything is read and held until the process exits, so a stray second `create 441` waits and then re-enters rather than racing the first through git, Composer, Sail and npm in one directory. The registry lock covers the free-slot search and the claim that follows it and nothing else — held across a five-minute bootstrap, it would serialise every unrelated worktree on the machine.
 
 Each lock records who took it, so a run whose holder is provably gone does not pay that wait at all. See [Locks, and the ones nobody holds](#locks-and-the-ones-nobody-holds).
+
+## Finding one
+
+```bash
+worktree path <slug> [--json]
+```
+
+The absolute path on stdout and nothing else, exit 0. A slug nothing holds is exit 1 with a line on stderr and an empty stdout — which is what makes it safe in a script, and the reason it is a command of its own:
+
+```bash
+worktree path 441 || echo "not created yet"
+
+wt() { cd "$(worktree path "$1")" || return; }
+```
+
+It is the read-only counterpart of `create`, and everything it declines to do is deliberate:
+
+| `create` | `path` |
+| --- | --- |
+| takes the worktree's lock for the whole run | takes no lock, so it answers while a bootstrap is still running |
+| retries whatever the entry records as degraded | runs nothing |
+| re-reads and verifies `HEAD` | asks git nothing beyond anchoring the repository |
+| bootstraps a slug it has never seen | exits 1 |
+
+A numeric slug is resolved out of the registry rather than through `gh`: `441` became `441-fix-login` or `issue-441` depending on what `gh` said the day the worktree was made, and both are already written down. So a lookup keeps working offline, and two worktrees that both answer to `441` — what a retitled issue leaves behind — are named rather than guessed between.
+
+`--json` emits the registry entry instead, in the shape `create --json` prints it, so a caller that wants the ports does not need `list --json | jq 'select(…)'`.
+
+It does not check that the directory is still there. An entry whose worktree somebody deleted by hand is a real problem, and one `list`, `remove` and this all have — it wants one answer across the three rather than a second vocabulary invented here.
 
 ## Listing
 

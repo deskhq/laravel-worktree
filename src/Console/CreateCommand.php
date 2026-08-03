@@ -11,7 +11,6 @@ use DeskHQ\LaravelWorktree\Compose\PublishedPorts;
 use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Config\EnvFile;
 use DeskHQ\LaravelWorktree\Exceptions\UsageException;
-use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Git\BaseRefs;
 use DeskHQ\LaravelWorktree\Git\Excludes;
@@ -160,7 +159,7 @@ final readonly class CreateCommand implements Command
         $entry = $this->record($allocator, $entry, $outcome);
 
         // The one line of this run that reaches the caller.
-        $this->emitter->emit($invocation->has(self::Json) ? self::json($entry) : $entry->path);
+        $this->emitter->emit($invocation->has(self::Json) ? $entry->toJson() : $entry->path);
 
         // And the notices after it, deliberately: one printed where it happened
         // scrolls away behind four minutes of asset building (the-desk#1005).
@@ -319,21 +318,6 @@ final readonly class CreateCommand implements Command
     private function environmentFile(Identity $identity, Entry $entry, Configuration $config, Anchor $anchor): string
     {
         return EnvFile::for($this->output, $anchor->mainRoot)->generate($identity, $entry->ports, $config->env);
-    }
-
-    /**
-     * The entry as `--json` publishes it: one line, so it composes with `jq`
-     * and with `read` alike.
-     */
-    private static function json(Entry $entry): string
-    {
-        $payload = json_encode($entry->toPayload(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-
-        if ($payload === false) {
-            throw new WorktreeException("the registry entry for '$entry->key' could not be encoded: ".json_last_error_msg());
-        }
-
-        return $payload;
     }
 
     private function worktrees(Anchor $anchor): Worktrees

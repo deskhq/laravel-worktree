@@ -300,6 +300,15 @@ function startWorktreeRemove(array $arguments = ['feat/checkout']): Process
  * @param  list<string>  $arguments
  * @param  array<string, string|false>  $env
  */
+function worktreePath(array $arguments = ['441'], ?string $cwd = null, array $env = []): Process
+{
+    return worktree(['path', ...$arguments], cwd: $cwd, env: $env);
+}
+
+/**
+ * @param  list<string>  $arguments
+ * @param  array<string, string|false>  $env
+ */
 function worktreeList(array $arguments = [], array $env = []): Process
 {
     return worktree(['list', ...$arguments], env: $env);

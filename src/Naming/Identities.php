@@ -8,6 +8,7 @@ use DeskHQ\LaravelWorktree\Console\Output;
 use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Process\ProcessRunner;
+use DeskHQ\LaravelWorktree\Registry\Entry;
 use DeskHQ\LaravelWorktree\Registry\Registry;
 
 /**
@@ -126,6 +127,90 @@ final readonly class Identities
         $this->refuseCollision($identity);
 
         return $identity;
+    }
+
+    /**
+     * The entry $argument names, or null when nothing holds it.
+     *
+     * The read-only half of {@see identify()}, and the one `path` runs: it
+     * derives the same key from the same argument, but it asks nothing outside
+     * the registry — no `gh`, and nothing that could create, retry or verify
+     * anything. A lookup that shelled out to name issue 441 would be a lookup
+     * that fails when somebody is offline.
+     *
+     * That is also why a numeric argument is *searched* for rather than derived.
+     * `441` becomes `441-fix-login` or `issue-441` depending on what `gh` said
+     * the day the worktree was made, and neither is recoverable from the number
+     * — but both are already written down, in a key beginning with this
+     * repository's prefix. So the number is matched against the slugs that are
+     * there, which is the same answer without the round-trip.
+     *
+     * Machine-global, exactly as {@see identify()} is: a key held by another
+     * checkout is found here and left for the caller to refuse, because "two
+     * clones share a project name" is a different thing to say than "nothing
+     * holds this name".
+     *
+     * @throws WorktreeException when $argument names nothing, or when a number names more than one worktree.
+     */
+    public function locate(string $argument): ?Entry
+    {
+        $argument = trim($argument);
+
+        if ($argument === '') {
+            throw new WorktreeException('name the worktree: an issue number, or a branch name');
+        }
+
+        if (preg_match('/\A\d+\z/', $argument) === 1) {
+            return $this->numbered($argument);
+        }
+
+        $slug = Slug::of($argument);
+
+        if ($slug === '') {
+            throw new WorktreeException("'$argument' has nothing in it to name a worktree with; give it letters or digits");
+        }
+
+        return $this->registry->entry(self::Marker.$this->repoSlug().'-'.$slug);
+    }
+
+    /**
+     * The one worktree of this repository whose slug names issue $number.
+     *
+     * Matched on the key rather than on the entry's `slug` field, because the
+     * key is the identifier — it is what Docker, the registry and `reap` all
+     * agree on, and an entry somebody has edited by hand can disagree with it.
+     *
+     * @throws WorktreeException when two of them do, which no run of `create` produces but a retitled issue can leave behind.
+     */
+    private function numbered(string $number): ?Entry
+    {
+        $prefix = self::Marker.$this->repoSlug().'-';
+        $matches = [];
+
+        foreach ($this->registry->all() as $key => $entry) {
+            if (str_starts_with($key, $prefix) && self::namesIssue(substr($key, strlen($prefix)), $number)) {
+                $matches[] = $entry;
+            }
+        }
+
+        if (count($matches) > 1) {
+            throw new WorktreeException(
+                "'$number' names more than one worktree of ".$this->repoSlug().': '
+                .implode(', ', array_map(fn (Entry $entry): string => $entry->key, $matches))
+                .'; name the one you meant by its slug'
+            );
+        }
+
+        return $matches[0] ?? null;
+    }
+
+    /**
+     * Whether $slug is what an issue number becomes: the number, whatever title
+     * `gh` folded onto it, or the `issue-<n>` used when `gh` could not answer.
+     */
+    private static function namesIssue(string $slug, string $number): bool
+    {
+        return $slug === $number || $slug === 'issue-'.$number || str_starts_with($slug, $number.'-');
     }
 
     /**

@@ -128,6 +128,25 @@ final readonly class Entry
     }
 
     /**
+     * The entry as `--json` publishes it: one line, so it composes with `jq` and
+     * with `read` alike.
+     *
+     * Here rather than on either command, because `create --json` and `path
+     * --json` answer the same question about the same worktree and a caller
+     * should not have to know which one it asked.
+     */
+    public function toJson(): string
+    {
+        $payload = json_encode($this->toPayload(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        if ($payload === false) {
+            throw new WorktreeException("the registry entry for '$this->key' could not be encoded: ".json_last_error_msg());
+        }
+
+        return $payload;
+    }
+
+    /**
      * The same entry, carrying what the bootstrap that just ran left behind.
      *
      * @param  list<string>  $degraded
