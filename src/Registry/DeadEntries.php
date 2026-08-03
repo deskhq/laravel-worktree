@@ -8,10 +8,10 @@ use DeskHQ\LaravelWorktree\Console\CreateCommand;
  * The entries this machine is holding slots for that have nothing behind them.
  *
  * One scan, three callers, deliberately — the same discipline the orphan scan
- * is under: `list` marks what it finds, `reap` reclaims it, and the allocator
- * points at `reap` when it runs out of slots with some of them held this way.
- * A column that says an entry is dead and a sweep that then declines to touch
- * it is a column nobody trusts twice.
+ * is under: `list` marks what it finds `gone`, `reap` reclaims it, and the
+ * allocator points at `reap` when it runs out of slots with some of them held
+ * this way. A column that says an entry is dead and a sweep that then declines
+ * to touch it is a column nobody trusts twice.
  *
  * ## What counts as gone
  *
@@ -34,12 +34,6 @@ use DeskHQ\LaravelWorktree\Console\CreateCommand;
  */
 final readonly class DeadEntries
 {
-    /** What `list` shows for an entry whose worktree is gone. */
-    public const string Gone = 'gone';
-
-    /** ...and for one that is where it says it is. */
-    public const string Live = 'ok';
-
     public function __construct(private Registry $registry) {}
 
     public static function for(Registry $registry): self
@@ -53,14 +47,6 @@ final readonly class DeadEntries
     public static function isDead(Entry $entry): bool
     {
         return ! is_dir($entry->path);
-    }
-
-    /**
-     * The token `list` prints for $entry, from the same test the sweep makes.
-     */
-    public static function status(Entry $entry): string
-    {
-        return self::isDead($entry) ? self::Gone : self::Live;
     }
 
     /**

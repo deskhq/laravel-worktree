@@ -48,6 +48,15 @@ final class Docker
     /** Sail's own override, which is how Podman is reached. */
     public const string BinaryVariable = 'SAIL_DOCKER_BINARY';
 
+    /**
+     * The state Docker gives a container that is up.
+     *
+     * The one value of `{{.State}}` that counts as running: `paused`,
+     * `restarting`, `created`, `exited` and `dead` are all things a person
+     * wants told apart from a worktree that is serving requests.
+     */
+    public const string Up = 'running';
+
     public const string DefaultBinary = 'docker';
 
     /**
@@ -125,18 +134,38 @@ final class Docker
     }
 
     /**
-     * How many containers each Compose project on this machine has.
+     * What every Compose project on this machine has, and how much of it is up.
      *
      * The other direction from {@see containers()}: that asks what one project
      * owns, this asks what projects exist at all, which is the only way to find
-     * a project no registry entry names any more ({@see Orphans}). One query
-     * either way — the label is printed per resource and counted here.
+     * a project no registry entry names any more ({@see Orphans}) — and, since
+     * #54, the only way to fill a `STATUS` column without one `docker` per row.
      *
-     * @return array<string, int>
+     * Still one query. The project label was already being printed per container
+     * and counted here; the state is a second field on the same line, which is
+     * what turns "this project has four containers" into "and one of them is
+     * up" — the difference between a worktree that is serving and one whose boot
+     * stopped partway.
+     *
+     * @return array<string, Presence>
      */
     public function containersByProject(): array
     {
-        return $this->tally([$this->binary, 'ps', '-a', '--filter', 'label='.self::ProjectLabel, '--format', self::labelTemplate()]);
+        $census = [];
+
+        foreach ($this->query([$this->binary, 'ps', '-a', '--filter', 'label='.self::ProjectLabel, '--format', self::censusTemplate()]) as $line) {
+            [$project, $state] = self::census($line);
+
+            if ($project === '') {
+                continue;
+            }
+
+            $census[$project] = ($census[$project] ?? Presence::none())->with($state === self::Up);
+        }
+
+        ksort($census);
+
+        return $census;
     }
 
     /**
@@ -258,6 +287,32 @@ final class Docker
     private static function labelTemplate(): string
     {
         return '{{.Label "'.self::ProjectLabel.'"}}';
+    }
+
+    /**
+     * The same, plus the container's own state — `docker ps` only, since a
+     * volume has none.
+     */
+    private static function censusTemplate(): string
+    {
+        return self::labelTemplate().' {{.State}}';
+    }
+
+    /**
+     * One census line as its two fields.
+     *
+     * Split on whitespace rather than on a delimiter of our own: a Compose
+     * project name may hold none — Docker restricts it to lowercase letters,
+     * digits, dashes and underscores — and neither may a container state, so
+     * there is nothing here for a separator to protect.
+     *
+     * @return array{string, string}
+     */
+    private static function census(string $line): array
+    {
+        $fields = preg_split('/\s+/', trim($line)) ?: [];
+
+        return [$fields[0] ?? '', $fields[1] ?? ''];
     }
 
     /**

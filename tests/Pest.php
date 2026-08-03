@@ -901,10 +901,19 @@ function registryNow(): array
  * One entry, as an earlier `create` would have written it.
  *
  * @param  array<string, int>|null  $ports
+ * @param  string|null  $createdAt  When the slot was claimed; a fixed date unless a case is about the `AGE` column.
+ * @param  list<string>  $degraded  Bootstrap steps that failed and were allowed to.
  * @return array<string, mixed>
  */
-function slotEntry(int $slot, string $slug, ?string $repo = null, ?string $branch = null, ?array $ports = null): array
-{
+function slotEntry(
+    int $slot,
+    string $slug,
+    ?string $repo = null,
+    ?string $branch = null,
+    ?array $ports = null,
+    ?string $createdAt = null,
+    array $degraded = [],
+): array {
     $repo ??= test()->main;
 
     if ($ports === null) {
@@ -915,15 +924,33 @@ function slotEntry(int $slot, string $slug, ?string $repo = null, ?string $branc
         }
     }
 
-    return [
+    $entry = [
         'slot' => $slot,
         'repo' => $repo,
         'slug' => $slug,
         'branch' => $branch ?? $slug,
         'path' => $repo.'-worktrees/'.$slug,
         'ports' => $ports,
-        'created_at' => '2026-01-01T00:00:00Z',
+        'created_at' => $createdAt ?? '2026-01-01T00:00:00Z',
     ];
+
+    // Absent rather than empty, exactly as `create` writes it: a healthy
+    // worktree's entry should read as a healthy worktree's entry.
+    return $degraded === [] ? $entry : $entry + ['degraded' => $degraded];
+}
+
+/**
+ * A timestamp $seconds ago, as `create` would have written it.
+ *
+ * Read at the call rather than pinned per process, so that the age a run
+ * computes from it is $seconds and not $seconds plus however long this worker
+ * had already been going. A case that asserts on the timestamp itself keeps the
+ * one it declared, rather than asking for a second one and comparing two
+ * instants.
+ */
+function claimedAgo(int $seconds): string
+{
+    return gmdate('Y-m-d\TH:i:s\Z', time() - $seconds);
 }
 
 /**
@@ -963,7 +990,7 @@ function diagnosticsIn($diagnostics): string
  * @param  list<string>  $containers  Ids the container label query answers with, for a project given no resources of its own.
  * @param  list<string>  $volumes  Names the volume label query answers with, likewise.
  * @param  list<string>  $refuses  Resources whose removal fails, as one still in use would.
- * @param  array<string, array{containers?: int|list<string>, volumes?: int|list<string>}>  $projects  What each Compose project on this daemon owns, as a count or as the resources themselves.
+ * @param  array<string, array{containers?: int|list<string>, volumes?: int|list<string>, running?: int}>  $projects  What each Compose project on this daemon owns, as a count or as the resources themselves, and how many of its containers are up (all of them unless said).
  * @param  bool  $daemon  Whether `docker info` succeeds at all.
  * @param  bool  $composeSubcommand  Whether `docker compose` exists, or only the standalone binary.
  * @param  bool  $producesSail  Whether `docker run` leaves a `vendor/bin/sail` behind, as the Composer image would.
@@ -987,7 +1014,7 @@ function fakeDockerBinary(
     $owned = projectResources($projects);
 
     $files = ['containers' => $containers, 'volumes' => $volumes, 'refuses' => $refuses]
-        + projectCensus($owned)
+        + projectCensus($owned, $projects)
         + $owned;
 
     foreach ($files as $name => $lines) {
@@ -1035,7 +1062,9 @@ function fakeDockerBinary(
                 PROJECT="\${FILE##*/}"
                 PROJECT="\${PROJECT#\$KIND.}"
 
-                awk -v project="\$PROJECT" 'BEGIN { dropped = 0 } { if (! dropped && \$0 == project) { dropped = 1; next } print }' \\
+                # The project is the first field of a census line, whether or
+                # not a container's state follows it.
+                awk -v project="\$PROJECT" 'BEGIN { dropped = 0 } { if (! dropped && \$1 == project) { dropped = 1; next } print }' \\
                     "\$STATE/\$CENSUS" > "\$STATE/next"
                 mv "\$STATE/next" "\$STATE/\$CENSUS"
             done
@@ -1174,18 +1203,34 @@ function projectResources(array $projects): array
  * The label census as Docker prints it: one line per container, and one per
  * volume, each carrying the Compose project it belongs to.
  *
+ * A container line carries its state as well, because that is the second field
+ * `list` reads to tell a worktree that is serving from one whose boot stopped
+ * partway (#54). A project says how many of its containers are up with
+ * `running`; unless it does, all of them are — "it has four containers" reads
+ * as a project that is up, and the cases about the other states say so.
+ *
  * @param  array<string, list<string>>  $resources  As {@see projectResources()} built them.
+ * @param  array<string, array{containers?: int|list<string>, volumes?: int|list<string>, running?: int}>  $projects
  * @return array{container-projects: list<string>, volume-projects: list<string>}
  */
-function projectCensus(array $resources): array
+function projectCensus(array $resources, array $projects = []): array
 {
     $census = ['container-projects' => [], 'volume-projects' => []];
 
     foreach ($resources as $file => $owned) {
         [$kind, $project] = explode('.', $file, 2);
-        $into = $kind === 'containers' ? 'container-projects' : 'volume-projects';
 
-        $census[$into] = [...$census[$into], ...array_fill(0, count($owned), $project)];
+        if ($kind === 'volumes') {
+            $census['volume-projects'] = [...$census['volume-projects'], ...array_fill(0, count($owned), $project)];
+
+            continue;
+        }
+
+        $up = $projects[$project]['running'] ?? count($owned);
+
+        foreach (array_keys($owned) as $index) {
+            $census['container-projects'][] = $project.' '.($index < $up ? 'running' : 'exited');
+        }
     }
 
     return $census;

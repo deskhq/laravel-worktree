@@ -34,12 +34,32 @@ use DeskHQ\LaravelWorktree\Registry\Registry;
  * Silence is not proof: with no daemon answering, the scan reports nothing
  * found, and its callers say only what they can stand behind — `list` omits the
  * warning entirely rather than announcing a clean machine it never asked about.
+ *
+ * ## The census is the scan
+ *
+ * The query this is built on — every container on the machine, by project —
+ * answers a second question the table needs: which of the rows it is printing
+ * has anything running behind it (#54). So it is asked once and kept
+ * ({@see containers()}), and the two callers inside one `list` share it. Ten
+ * worktrees must not mean ten `docker` invocations, and the data was already in
+ * hand and being thrown away.
  */
-final readonly class Orphans
+final class Orphans
 {
+    /**
+     * The census, once asked: the projects on this daemon, or null for a daemon
+     * that could not be asked at all.
+     *
+     * @var array<string, Presence>|null
+     */
+    private ?array $containers = null;
+
+    /** Whether the question above has been put yet, which null cannot say. */
+    private bool $asked = false;
+
     public function __construct(
-        private Docker $docker,
-        private Registry $registry,
+        private readonly Docker $docker,
+        private readonly Registry $registry,
     ) {}
 
     public static function for(Registry $registry, ProcessRunner $runner, Output $output): self
@@ -59,6 +79,39 @@ final readonly class Orphans
     public function reachable(): bool
     {
         return $this->docker->isRunning();
+    }
+
+    /**
+     * Every `wt-` project this daemon has, and how much of each is up — or null
+     * when there was no daemon to ask.
+     *
+     * Null rather than an empty census, because those are different answers and
+     * collapsing them is the shape of the-desk#1095: nothing here may report a
+     * machine as clean, or a worktree as never booted, on the strength of a
+     * question nobody could put. The table renders that as `unknown`
+     * ({@see Status}), and the warning below renders it as silence.
+     *
+     * Asked once and kept, so that the row a person is reading and the warning
+     * under it are answered from the same snapshot as well as from the same
+     * query.
+     *
+     * @return array<string, Presence>|null
+     */
+    public function containers(): ?array
+    {
+        if ($this->asked) {
+            return $this->containers;
+        }
+
+        $this->asked = true;
+
+        // Asked rather than inferred from an empty answer: every Docker query
+        // here reports "nothing" when it could not be run, and reporting a
+        // machine as clean because nothing could be asked about it is the shape
+        // of the-desk#1095.
+        return $this->containers = $this->docker->isRunning()
+            ? $this->docker->containersByProject()
+            : null;
     }
 
     /**
@@ -86,15 +139,12 @@ final readonly class Orphans
             );
         }
 
-        // Asked rather than inferred from an empty answer: every Docker query
-        // here reports "nothing" when it could not be run, and reporting a
-        // machine as clean because nothing could be asked about it is the shape
-        // of the-desk#1095.
-        if (! $this->docker->isRunning()) {
+        $containers = $this->containers();
+
+        if ($containers === null) {
             return [];
         }
 
-        $containers = $this->docker->containersByProject();
         $volumes = $this->docker->volumesByProject();
         $claimed = $this->registry->all();
 
@@ -108,7 +158,11 @@ final readonly class Orphans
                 continue;
             }
 
-            $orphans[] = new Orphan($project, $containers[$project] ?? 0, $volumes[$project] ?? 0);
+            $orphans[] = new Orphan(
+                $project,
+                ($containers[$project] ?? Presence::none())->containers,
+                $volumes[$project] ?? 0,
+            );
         }
 
         return $orphans;

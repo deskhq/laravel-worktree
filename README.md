@@ -166,7 +166,7 @@ A numeric slug is resolved out of the registry rather than through `gh`: `441` b
 
 `--json` emits the registry entry instead, in the shape `create --json` prints it, so a caller that wants the ports does not need `list --json | jq 'select(…)'`.
 
-It does not check that the directory is still there — deliberately, because it is the read-only fast path and the answer to that question lives elsewhere: [`list`](#status-and-the-row-that-is-not-a-worktree) marks such an entry `gone`, and [`reap`](#reaping) reclaims it. One vocabulary across the commands, rather than a second one invented here.
+It does not check that the directory is still there — deliberately, because it is the read-only fast path and the answer to that question lives elsewhere: [`list`](#status-and-age-or-what-is-actually-there) marks such an entry `gone`, and [`reap`](#reaping) reclaims it. One vocabulary across the commands, rather than a second one invented here.
 
 ## Listing
 
@@ -191,9 +191,9 @@ Every field in full: the key, the branch, the absolute path. No `column`, no sub
 
 ```
 paths under /Users/agent/www/the-desk-worktrees
-KEY                        SLOT  APP    VITE   REVERB  DB     REDIS  PATH
-wt-the-desk-441-fix-login  0     20000  20001  20002   20003  20004  441-fix-login
-wt-the-desk-feat-search    1     20010  20011  20012   20013  20014  feat-search
+KEY                        SLOT  APP    VITE   REVERB  DB     REDIS  PATH           STATUS   AGE
+wt-the-desk-441-fix-login  0     20000  20001  20002   20003  20004  441-fix-login  running  4h
+wt-the-desk-feat-search    1     20010  20011  20012   20013  20014  feat-search    stopped  9d
 ```
 
 Three things are elided, all of them things the line already says somewhere else:
@@ -206,28 +206,58 @@ The width comes from `COLUMNS`, then from `stty`, then from 80. The header is di
 
 The port columns are whatever `ports` names, in the order it names them, so a repository that publishes a `meilisearch` port gets a `MEILISEARCH` column without this command knowing anything about it — in both renderings, as is `-` for a port an entry does not hold.
 
-### `STATUS`, and the row that is not a worktree
+### `STATUS` and `AGE`, or what is actually there
 
-An entry whose `path` is not a directory any more is holding a slot and a port block with nothing behind it — somebody `rm -rf`'d the worktree, or ran `git worktree remove` directly, or deleted the whole clone. It is not an orphan, because the registry claims it, and it is not a worktree, because there is nothing there. Until it was marked, it rendered exactly like a healthy row, which is what made *which of these fifty is real?* unanswerable:
+Every column above comes out of the registry — a faithful report of what has been *claimed*, and silent on the questions somebody with five worktrees open actually has. Which of these is up, and which is idle eating nothing? This one is degraded; did it ever finish bootstrapping at all? I made that one yesterday and forgot about it — is it holding four containers? The answer used to be `docker ps` and reading project names by eye, which is exactly the manual step this package exists to remove.
 
 ```
 paths under /Users/agent/www/the-desk-worktrees
-KEY                        SLOT  APP    VITE   REVERB  DB     REDIS  PATH           STATUS
-wt-the-desk-441-fix-login  0     20000  20001  20002   20003  20004  441-fix-login  ok
-wt-the-desk-feat-search    1     20010  20011  20012   20013  20014  feat-search    gone
+KEY                        SLOT  APP    VITE   REVERB  DB     REDIS  PATH           STATUS    AGE
+wt-the-desk-441-fix-login  0     20000  20001  20002   20003  20004  441-fix-login  running   4h
+wt-the-desk-feat-search    1     20010  20011  20012   20013  20014  feat-search    partial   9d
+wt-the-desk-chore-deps     2     20020  20021  20022   20023  20024  chore-deps     degraded  3d
+wt-the-desk-feat-checkout  3     20030  20031  20032   20033  20034  feat-checkout  unbooted  152d
+wt-the-desk-441-old        4     20040  20041  20042   20043  20044  441-old        gone      201d
 ```
 
+**`STATUS`** is one word for what the row *is*, and it is one column rather than two because a registry fact and a daemon fact about the same worktree that disagree are the interesting case, not two separate reports to reconcile by eye:
+
+| token | what it means |
+| --- | --- |
+| `running` | every container this project has is up |
+| `partial` | some are, some are not — a boot that stopped partway, or a service that died under its siblings |
+| `stopped` | containers exist and none of them is up |
+| `unbooted` | the daemon has nothing for this project: never booted, or torn down |
+| `degraded` | the entry records bootstrap steps that failed and were [allowed to](#degrading-and-the-retry-that-follows) |
+| `gone` | the registry claims a worktree the disk has never heard of |
+| `unknown` | there was no daemon to ask |
+
+Lowercase single words, a small closed set, and stable — this is a tab-separated column a script compares against, so it is not prose. The set is meant to grow, so compare against a token rather than against "not `running`". `ok` is not one of them any more: with the daemon answering there is no state left that means only *nothing to report*.
+
+They are ordered by what you would do about them, and the most durable answer wins. `gone` outranks everything, because a slot with no worktree behind it stays wrong whatever its containers are doing. `degraded` outranks the daemon's own answer, and shows on a machine with no daemon at all, because an unfinished bootstrap step outlives any number of restarts — a degraded worktree that is also running says `degraded`, and `--json` carries both facts for a reader that wants them apart. Both of those, and only those, are registry facts, so they survive Docker Desktop being closed.
+
+Each has its remedy named on **stderr**, for the same reason the orphan warning is there — a marker nobody knows the remedy for is read as decoration:
+
 ```
-wt-the-desk-feat-search holds a slot whose worktree directory is gone; 'worktree reap' reclaims it
+wt-the-desk-441-old holds a slot whose worktree directory is gone; 'worktree reap' reclaims it
+chore-deps has bootstrap steps that did not finish; 'worktree create chore-deps' retries them
 ```
 
-Two tokens so far, `ok` and `gone`, from the same test [`reap`](#reaping) sweeps by — a column that says an entry is dead and a sweep that then declines to touch it is a column nobody trusts twice. The set is meant to grow, so compare against the token rather than against "not `ok`".
+**`AGE`** is how long ago the slot was claimed, from the `created_at` every entry has carried since the registry existed and nothing ever showed. It is what turns *I have twelve worktrees* into *and four of them are from March*. One unit — the largest with whole numbers of itself in the answer — and days all the way out: `47s`, `12m`, `5h`, `152d`. No weeks and no months, because `152d` says *from March* just as well, and `mo` beside `m` in a column that is scanned rather than read does not. An entry whose timestamp cannot be read shows `-` rather than a `0s` that would put the newest-looking row in the table on the oldest entry in it.
 
-The column is **on the end**, where a column added later does not move the fields a script already reads by position, and the piped rendering always carries it: that one is a contract, and a field that comes and goes is not one. The terminal rendering carries it only when some row has something to say, on the same rule that drops `BRANCH` — a column of `ok` is width spent on nothing.
+Both columns are **on the end**, in the order they were added, where a column added later does not move the fields a script already reads by position — and both are in both renderings, always. The piped one is a contract and a field that comes and goes is not one; the fitted one no longer has the excuse it had while `STATUS` could only say `ok`, since every token it prints now is something to act on.
 
-Nothing here asks Docker, so the marking survives a machine with the daemon closed. The line naming the sweep is on stderr, with the orphan warning, and for the same reason.
+**With no daemon reachable**, `list` still prints the whole table and `STATUS` reads `unknown`. Not a failure, and not an inferred clean bill of health: the same rule the orphan warning is under, where silence is not proof.
 
-`--json` is deliberately unchanged: its payload is the registry entry exactly as `create --json` and `path --json` publish it, and none of the three consults the disk. A reader that wants this fact has the absolute path and one `test -d`.
+**It costs one `docker` invocation for the whole table**, whatever the number of rows. `list` was already querying the daemon on every run for the orphan warning, over the same `wt-` projects the table is listing, and throwing the containers-per-project half of the answer away; the column is built from that one census, not from a query per row.
+
+`--json` gets both as fields rather than as a rendering:
+
+```json
+{"project":"wt-the-desk-441-fix-login", "…": "…", "degraded":[], "status":"running", "age_seconds":14472}
+```
+
+Seconds rather than `4h`, because a script that asked for structure wants the subtraction and can render the word from it. The payload is otherwise the registry entry exactly as `create --json` and `path --json` publish it — a superset of that object rather than a different one, since those two answer about a worktree already in hand and neither pays for a daemon query to do it.
 
 `php artisan worktree:list` forwards to the binary over a pipe, so it prints the parseable rendering. The facade is a delegator and passes stdout through untouched; `vendor/bin/worktree list` is what a terminal gets the fitted table from.
 
@@ -236,7 +266,7 @@ It shows the checkout it was run from. `--all` widens it to the machine — whic
 `--json` emits the registry entries instead, on one line, as `create --json` emits one:
 
 ```bash
-worktree list --json | jq -r '.[] | select(.degraded | length > 0) | .project'
+worktree list --json | jq -r '.[] | select(.status == "running") | .project'
 ```
 
 An empty registry is a line on stderr rather than a header with nothing under it — except under `--json`, where `[]` is the answer a script asked for.
