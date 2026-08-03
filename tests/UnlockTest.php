@@ -46,8 +46,9 @@ it('removes a lock whose holder is gone, and names who took it', function () {
         ->and($process->getOutput())->toBe('')
         ->and($process->getErrorOutput())
         ->toContain('removed '.$this->lock)
+        // Who took it, in the clause `Owner` writes for every command that has
+        // to describe a holder; LockTest owns the wording of it.
         ->toContain('worktree create feat/checkout')
-        ->toContain('which is not running any more')
         ->and($this->lock)->not->toBeDirectory();
 });
 
@@ -73,8 +74,8 @@ it('refuses a lock whose holder is still running, and says what to type instead'
 
     expect($process)->toHaveExited(1)
         ->and($process->getErrorOutput())
-        ->toContain($this->lock.' is held by pid '.$holder->getPid())
-        ->toContain('and that process is still running')
+        ->toContain($this->lock.' is taken by pid '.$holder->getPid())
+        ->toContain('which is still running')
         ->toContain('pass --force to remove it anyway')
         // Untouched, which is the point: the run that is inside that directory
         // is still inside it.
@@ -91,7 +92,7 @@ it('removes a lock whose holder is still running when it is told to', function (
         ->and($process->getErrorOutput())
         ->toContain('removed '.$this->lock)
         ->toContain('pid '.$holder->getPid())
-        ->toContain('which this run was told to remove regardless')
+        ->toContain('and this run was told to remove it regardless')
         ->and($this->lock)->not->toBeDirectory();
 });
 
@@ -108,7 +109,7 @@ it('reads one holder the same way whichever timezone each run is in', function (
     expect($process)->toHaveExited(1)
         ->and($process->getErrorOutput())
         ->toContain('pid '.$holder->getPid())
-        ->toContain('and that process is still running')
+        ->toContain('which is still running')
         ->and($this->lock)->toBeDirectory();
 });
 

@@ -1,5 +1,6 @@
 <?php
 
+use DeskHQ\LaravelWorktree\Runtime\SailRuntime;
 use Symfony\Component\Process\ExecutableFinder;
 use Symfony\Component\Process\Process;
 
@@ -11,11 +12,21 @@ use Symfony\Component\Process\Process;
  * machine it cannot touch.
  *
  * Two things are under test everywhere here. **Every check runs**: a report that
- * stopped at the first failure would be the refusal `create` already gives.
- * And **the messages are the ones the run itself would have used** — the checks
- * that used to only throw now build their refusal in one place, and the cases
- * below pin the exact sentences, because a report that reworded them would send
- * somebody looking for a sentence that appears nowhere else in the package.
+ * stopped at the first failure would be the refusal `create` already gives. And
+ * **each check reaches the right verdict**, which is this command's own
+ * vocabulary and the only thing in the report that is not somebody else's.
+ *
+ * ## What these cases deliberately do not assert
+ *
+ * The refusals themselves. Every one of them is built by the module that
+ * enforces it — the published-port collision by `PublishedPorts`, the exhausted
+ * registry and the bind-probe skip by `Allocator`, the lock holder by `Owner`,
+ * the app service by `Services` — and each is pinned by *that* module's own
+ * test. A second copy here bought nothing but a second edit, and where the two
+ * copies disagreed it was this file that was wrong (#74). What is pinned below
+ * is what `doctor` itself writes: the counts, the "could not be checked"
+ * sentences, and the lines that describe a healthy answer, which nothing else in
+ * the package has occasion to say.
  *
  * Most cases assert through `--json` rather than through the rendering: the
  * columns are padded to the widest verdict a run produced, so a test that
@@ -111,21 +122,27 @@ it('reports every failure rather than stopping at the first', function () {
 
     expect($process)->toHaveExited(1)
         ->and(verdictsOf($process))->toMatchArray([
-            'sail' => 'fail',
             'ports' => 'fail',
-            // And the ones after the failures ran anyway, which is the point.
+            // A checkout with no Sail anywhere is a warning rather than a
+            // refusal: the manifest is not the only way an install produces one.
+            'sail' => 'warn',
+            // And the ones after the failure ran anyway, which is the point.
             'slots' => 'ok',
             'locks' => 'ok',
         ]);
 });
 
 /**
- * The pre-flight from #36, word for word. It is the best thing this package says
- * — the mapping, the reason that service is running at all, and the one edit
- * that fixes it — and moving it out of a `throw` and into a report is where it
- * would have been quietly shortened.
+ * The pre-flight from #36, carried rather than summarised. It is the best thing
+ * this package says — the mapping, the reason that service is running at all,
+ * and the one edit that fixes it — and it is three lines long, which is what a
+ * report is tempted to shorten.
+ *
+ * The sentence itself is `PublishedPorts`' and is pinned by PublishedPortsTest.
+ * What is asserted here is that the whole of it arrives: the last line of a
+ * refusal built three lines at a time is the part a summary would have dropped.
  */
-it('carries the published-port refusal exactly as a create raises it', function () {
+it('carries the published-port refusal as a create raises it, in full', function () {
     file_put_contents($this->main.'/compose.yaml', <<<'YAML'
         services:
           laravel.test:
@@ -136,17 +153,12 @@ it('carries the published-port refusal exactly as a create raises it', function 
             ports: ['6379:6379']
         YAML);
 
-    $process = worktreeDoctor();
+    $process = worktreeDoctor(['--json']);
 
     expect($process)->toHaveExited(1)
-        ->and($process->getErrorOutput())
-        ->toContain('config/worktree.php: 1 published host port would be the same in every worktree, so the second one '
-            .'to start would die on a Docker bind error naming a port nothing here configures:')
-        ->toContain("redis publishes '6379:6379'")
-        ->toContain('started because laravel.test depends on it, and it is the app service')
-        ->toContain('the host side is a literal, so there is no variable for \'env\' to offset: give redis a '
-            ."'compose.port_overrides' entry, which replaces its ports: outright")
-        ->toContain('Every published port of every service a worktree starts needs an entry');
+        ->and(doctorReport($process)['ports'])
+        ->verdict->toBe('fail')
+        ->message->toBe(publishedPortRefusal($this->main));
 });
 
 /**
@@ -201,17 +213,40 @@ it('works with no Docker daemon, reporting what it could not check rather than i
         ->toContain('nothing here says the disk is clean');
 });
 
-it('refuses a Compose too old for the merge tag the overlay is written with', function () {
+/**
+ * The version pre-flight, graded by whether this repository writes an overlay at
+ * all — because `Overlay::generate()` returns before verifying the version when
+ * nothing is configured to be overridden, so on such a repository a create never
+ * makes this check. A report that failed over it was refusing a machine that
+ * would have worked (#74). The sentence is `ComposeVersion`'s and OverlayTest
+ * pins it.
+ */
+it('grades a Compose too old for the merge tag by whether this repository writes an overlay', function () {
     $this->docker = fakeDockerBinary($this->root, composeVersion: '2.23.3');
+
+    expect(doctorReport(worktreeDoctor(['--json']))['compose'])
+        ->verdict->toBe('warn')
+        ->message->toContain('no keep_services, no port_overrides — so a create would not reach this check');
+
+    configureRepository(['compose' => ['keep_services' => ['redis']]]);
 
     $process = worktreeDoctor(['--json']);
 
     expect($process)->toHaveExited(1)
-        ->and(doctorReport($process)['compose'])->toMatchArray([
-            'verdict' => 'fail',
-            'message' => "Docker Compose >= 2.24 is required for the '!override' merge tag "
-                .'compose.worktree.yaml is written with (found 2.23.3)',
-        ]);
+        ->and(doctorReport($process)['compose']['verdict'])->toBe('fail');
+});
+
+/**
+ * A Compose that is missing outright is a failure however this repository is
+ * configured: `sail up -d` is Compose, overlay or no overlay.
+ */
+it('refuses a machine with no Compose v2 at all, whatever the overlay would have been', function () {
+    $this->docker = fakeDockerBinary($this->root, composeSubcommand: false);
+
+    $process = worktreeDoctor(['--json']);
+
+    expect($process)->toHaveExited(1)
+        ->and(doctorReport($process)['compose']['verdict'])->toBe('fail');
 });
 
 /**
@@ -231,13 +266,17 @@ it('says it could not tell, for a Compose that names no version it can read', fu
         ->toContain("answered 'devel', which does not name a version");
 });
 
+/**
+ * The warning is `Services`' sentence, said here and by `create`'s own
+ * pre-flight; CreateTest pins the wording. The failure is this command's own —
+ * nothing else in the package has anything to say about a repository with no
+ * Compose file at all, since every other reader of it treats that as "declares
+ * no services".
+ */
 it('warns about a service the Compose file does not declare, and fails when there is no file at all', function () {
     file_put_contents($this->main.'/.env', "APP_NAME=Desk\nAPP_SERVICE=web\n");
 
-    expect(doctorReport(worktreeDoctor(['--json']))['service'])
-        ->verdict->toBe('warn')
-        ->message->toContain("compose.yaml declares no service named 'web'")
-        ->message->toContain('include: or extends:');
+    expect(doctorReport(worktreeDoctor(['--json']))['service']['verdict'])->toBe('warn');
 
     unlink($this->main.'/compose.yaml');
 
@@ -246,12 +285,19 @@ it('warns about a service the Compose file does not declare, and fails when ther
         ->message->toContain('this checkout has no Compose file');
 });
 
-it('takes vendor/bin/sail as the answer when composer.json does not name it', function () {
+/**
+ * Warned rather than failed, since #74: a manifest that does not name
+ * `laravel/sail` is a strong hint and not a fact. A path repository, a
+ * `replace`, or a fork under another name all produce a `vendor/bin/sail` the
+ * runtime is perfectly happy with, and only the install itself can settle it —
+ * so the report says so instead of calling a working repository broken.
+ */
+it('warns when nothing here names Sail, rather than refusing a repository that may still have one', function () {
     unlink($this->main.'/composer.json');
 
     expect(doctorReport(worktreeDoctor(['--json']))['sail'])
-        ->verdict->toBe('fail')
-        ->message->toContain('composer require laravel/sail --dev');
+        ->verdict->toBe('warn')
+        ->message->toContain(SailRuntime::Install);
 
     fakeSail($this->main);
 
@@ -271,12 +317,11 @@ it('counts the slots this machine has claimed, and fails when it has claimed all
 
     $process = worktreeDoctor(['--json']);
 
+    // Machine-wide, because slots are: the second entry is another checkout's,
+    // and it is holding a port block all the same. What the exhaustion *says* is
+    // the allocator's refusal, which AllocatorTest pins.
     expect($process)->toHaveExited(1)
-        ->and(doctorReport($process)['slots'])
-        ->verdict->toBe('fail')
-        // Machine-wide, because slots are: the second entry is another
-        // checkout's, and it is holding a port block all the same.
-        ->message->toContain('all 2 slots are in use')
+        ->and(doctorReport($process)['slots']['verdict'])->toBe('fail')
         ->and(doctorReport($process)['block'])
         ->verdict->toBe('unchecked')
         ->message->toContain('every slot on this machine is claimed');
@@ -306,6 +351,36 @@ it('warns about a port block something outside the registry is holding, and name
             .($this->base + 10).'-'.($this->base + 14).') are free');
 });
 
+/**
+ * The other end of the same search, which had no test at all before #74: every
+ * free slot's block held by something outside the registry. The refusal is the
+ * allocator's, word for word, and AllocatorTest pins it; what is asserted here
+ * is that this is a **failure** — a create would have nowhere to go — and that
+ * the report still names every slot it walked past.
+ */
+it('fails when no free slot has a free port block, and names each one it probed', function () {
+    configureRepository(['slots' => 2]);
+
+    $held = [
+        stream_socket_server('tcp://0.0.0.0:'.$this->base, $code, $message, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN),
+        stream_socket_server('tcp://0.0.0.0:'.($this->base + 12), $code, $message, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN),
+    ];
+
+    expect($held[0])->not->toBeFalse()->and($held[1])->not->toBeFalse();
+
+    $process = worktreeDoctor(['--json']);
+
+    foreach ($held as $socket) {
+        fclose($socket);
+    }
+
+    expect($process)->toHaveExited(1)
+        ->and(doctorReport($process)['block'])
+        ->verdict->toBe('fail')
+        ->message->toContain('slot 0 is free in the registry, but port '.$this->base.' (app)')
+        ->message->toContain('slot 1 is free in the registry, but port '.($this->base + 12).' (reverb)');
+});
+
 it('names the registry entries with nothing behind them, and the sweep that reclaims them', function () {
     registryHolds(
         ['wt-desk-441-fix-login' => slotEntry(0, '441-fix-login')],
@@ -322,6 +397,26 @@ it('names the registry entries with nothing behind them, and the sweep that recl
         ->message->toContain("'worktree reap' reclaims it");
 });
 
+/**
+ * The `--all` half of the same sentence, which nothing exercised before #74: a
+ * scoped `reap` reaches this checkout's dead entries and the ones whose checkout
+ * is gone too, and nothing else — so a dead entry belonging to a clone that is
+ * still there is only reclaimable by the machine-wide sweep, and naming the
+ * scoped one would send somebody back having done exactly what they were told.
+ */
+it('names the machine-wide sweep when a dead entry belongs to a checkout that is still there', function () {
+    mkdir($this->root.'/shop', 0755, true);
+
+    registryHolds(
+        ['wt-shop-feat-checkout' => slotEntry(1, 'feat-checkout', repo: $this->root.'/shop')],
+        gone: ['wt-shop-feat-checkout'],
+    );
+
+    expect(doctorReport(worktreeDoctor(['--json']))['entries'])
+        ->verdict->toBe('warn')
+        ->message->toContain("'worktree reap --all' reclaims it");
+});
+
 it('names a lock whose holder is not running any more, and the command that removes it', function () {
     lockTakenBy($this->home.'/locks/wt-desk-441-fix-login.lock', ownerRecord(['pid' => deadPid()]));
 
@@ -330,8 +425,9 @@ it('names a lock whose holder is not running any more, and the command that remo
     expect($process)->toHaveSucceeded()
         ->and(doctorReport($process)['locks'])
         ->verdict->toBe('warn')
+        // The count and the remedy are this report's; what it says about the
+        // holder is `Owner`'s clause, and LockTest pins that.
         ->message->toContain('1 of 1 lock on this machine is held by nothing this run could find')
-        ->message->toContain('which is not running any more')
         ->message->toContain("'worktree unlock --all' removes them now");
 });
 

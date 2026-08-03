@@ -134,6 +134,79 @@ final readonly class Allocator
     }
 
     /**
+     * The slot a create would take next, and the ones it would pass on the way
+     * — asked without claiming anything.
+     *
+     * The allocator's own search, lifted out of the claim so that `worktree
+     * doctor` can put exactly the question a create puts ({@see SlotSearch}).
+     * It takes no lock and writes nothing, which is what makes it safe to ask
+     * outside one; the caller that goes on to *claim* the answer is the one that
+     * has to hold the registry lock across both.
+     *
+     * @throws WorktreeException when the registry cannot be read.
+     */
+    public function search(): SlotSearch
+    {
+        $claimed = $this->registry->claimedSlots();
+        $skipped = [];
+
+        for ($slot = 0; $slot < $this->slots; $slot++) {
+            if (in_array($slot, $claimed, true)) {
+                continue;
+            }
+
+            $taken = $this->probe->firstTaken($this->ports->forSlot($slot));
+
+            if ($taken === null) {
+                return new SlotSearch($slot, $skipped, $this->slots);
+            }
+
+            [$name, $port] = $taken;
+
+            $skipped[] = ['slot' => $slot, 'name' => $name, 'port' => $port];
+        }
+
+        return new SlotSearch(null, $skipped, $this->slots);
+    }
+
+    /**
+     * Every slot claimed, and what to do about it.
+     *
+     * *Free one, or raise `slots`* is unactionable advice when the slots are
+     * held by entries whose directories, branches and repositories are all gone:
+     * the honest reading of it is "raise `slots`", which grows the leak instead
+     * of fixing it (#53). So the entries with nothing behind them are counted
+     * here — the registry has just been read for the search above — and the
+     * sweep that reclaims them is named.
+     *
+     * `--all` unless *every* one of them is reclaimable from this checkout: the
+     * count is machine-wide, because slots are, and a message that counts three
+     * and then names a run that would reclaim two sends somebody back to an
+     * exhausted registry having done what it said.
+     *
+     * Public because `worktree doctor` reports this exhaustion rather than
+     * refusing over it, and hardcoded its own `--all` before it could ask here
+     * (#74).
+     */
+    public function exhaustion(string $repo): string
+    {
+        $dead = DeadEntries::for($this->registry)->of(null);
+
+        if ($dead === []) {
+            return "all $this->slots worktree slots are in use; free one with 'worktree remove <slug>', or raise 'slots'";
+        }
+
+        $here = array_filter($dead, fn (DeadEntry $entry): bool => $entry->isReclaimableFrom(rtrim($repo, '/')));
+        $one = count($dead) === 1;
+
+        return "all $this->slots worktree slots are in use, and ".count($dead).' of them '
+            .($one ? 'is held by a registry entry whose' : 'are held by registry entries whose')
+            .' worktree directory is gone; '
+            ."'worktree reap".(count($here) === count($dead) ? '' : ' --all')."' reclaims ".($one ? 'it' : 'them')
+            .", or free one with 'worktree remove <slug>'";
+    }
+
+    /**
      * Do $work holding both locks, in the one order this package ever takes
      * them: **the worktree's own first, then the registry's.**
      *
@@ -161,71 +234,31 @@ final readonly class Allocator
     }
 
     /**
-     * The lowest slot no entry claims and nothing is already listening on.
+     * The lowest slot no entry claims and nothing is already listening on,
+     * claimed by the caller.
      *
      * Called under the registry lock — the search and the claim that follows it
-     * are one step, or two runs both see slot 3 free.
+     * are one step, or two runs both see slot 3 free. What is said about each
+     * skipped block is said here rather than in {@see search()}, because this is
+     * the run that is *being* skipped past: `doctor` reports the same slots as
+     * ones a create would skip, in the tense that fits a report.
+     *
+     * @throws WorktreeException when no slot is free.
      */
     private function freeSlot(string $repo): int
     {
-        $claimed = $this->registry->claimedSlots();
-        $skipped = [];
+        $search = $this->search();
 
-        for ($slot = 0; $slot < $this->slots; $slot++) {
-            if (in_array($slot, $claimed, true)) {
-                continue;
-            }
-
-            $taken = $this->probe->firstTaken($this->ports->forSlot($slot));
-
-            if ($taken !== null) {
-                [$name, $port] = $taken;
-
-                $this->output->line("slot $slot skipped: port $port ($name) is already in use on this machine");
-                $skipped[] = $slot;
-
-                continue;
-            }
-
-            return $slot;
+        foreach ($search->skipped as $skip) {
+            $this->output->line(
+                'slot '.$skip['slot'].' skipped: port '.$skip['port'].' ('.$skip['name'].') is already in use on this machine'
+            );
         }
 
-        throw new WorktreeException($skipped === []
-            ? $this->exhausted($repo)
-            : 'no free slot has a free port block ('.count($skipped).' of '.$this->slots.' slots skipped by the bind probe); '
-              .'stop whatever is holding those ports, or move port_base');
-    }
-
-    /**
-     * Every slot claimed, and what to do about it.
-     *
-     * *Free one, or raise `slots`* is unactionable advice when the slots are
-     * held by entries whose directories, branches and repositories are all gone:
-     * the honest reading of it is "raise `slots`", which grows the leak instead
-     * of fixing it (#53). So the entries with nothing behind them are counted
-     * here — the registry has just been read for the search above — and the
-     * sweep that reclaims them is named.
-     *
-     * `--all` unless *every* one of them is reclaimable from this checkout: the
-     * count is machine-wide, because slots are, and a message that counts three
-     * and then names a run that would reclaim two sends somebody back to an
-     * exhausted registry having done what it said.
-     */
-    private function exhausted(string $repo): string
-    {
-        $dead = DeadEntries::for($this->registry)->of(null);
-
-        if ($dead === []) {
-            return "all $this->slots worktree slots are in use; free one with 'worktree remove <slug>', or raise 'slots'";
+        if ($search->slot !== null) {
+            return $search->slot;
         }
 
-        $here = array_filter($dead, fn (DeadEntry $entry): bool => $entry->isReclaimableFrom($repo));
-        $one = count($dead) === 1;
-
-        return "all $this->slots worktree slots are in use, and ".count($dead).' of them '
-            .($one ? 'is held by a registry entry whose' : 'are held by registry entries whose')
-            .' worktree directory is gone; '
-            ."'worktree reap".(count($here) === count($dead) ? '' : ' --all')."' reclaims ".($one ? 'it' : 'them')
-            .", or free one with 'worktree remove <slug>'";
+        throw new WorktreeException($search->exhausted() ? $this->exhaustion($repo) : $search->refusal());
     }
 }

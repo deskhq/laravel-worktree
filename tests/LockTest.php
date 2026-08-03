@@ -151,6 +151,29 @@ it('records who took it, inside the lock it took', function () {
         ->and($owner->liveness(machine()))->toBe(Liveness::Alive);
 });
 
+/**
+ * The clause every command that has to describe a held lock is built out of.
+ *
+ * It is written once, in {@see Owner::heldBy()}, and pinned once — here.
+ * `worktree unlock` refuses with it, `worktree doctor` reports with it, and the
+ * run that waits for a lock prints it; all three used to word it themselves, and
+ * *"which is not running any more"* was typed out in three files (#74).
+ */
+it('says who holds a lock and whether they are still there, in one clause', function (Liveness $liveness, string $said) {
+    lockTakenBy($this->home.'/locks/wt-desk-441.lock', ownerRecord());
+
+    $owner = Owner::read($this->home.'/locks/wt-desk-441.lock');
+
+    expect($owner?->heldBy($liveness))->toBe(
+        'taken by pid '.getmypid().' on '.machine()->host().' (worktree create 441), '
+        .'holding it since 2026-08-01T09:12:44Z'.$said
+    );
+})->with([
+    'a run that is still going' => [Liveness::Alive, ', which is still running'],
+    'one this machine can prove is gone' => [Liveness::Gone, ', which is not running any more'],
+    'one on another machine' => [Liveness::Unknown, ', on another machine — nothing here can tell whether it is still running'],
+]);
+
 it('breaks a lock whose holder is not running, and says that it did', function () {
     lockTakenBy($this->home.'/locks/wt-desk-441.lock', ownerRecord(['pid' => deadPid()]));
 
@@ -240,7 +263,7 @@ it('waits for a lock another machine took, whatever its pid table says here', fu
         ->and($this->home.'/locks/wt-desk-441.lock')->toBeDirectory()
         ->and(diagnosticsIn($this->diagnostics))
         ->toContain('somebody-elses-laptop.local')
-        ->toContain('another machine, so nothing here can tell whether it is still running');
+        ->toContain('on another machine — nothing here can tell whether it is still running');
 });
 
 it('will not break a lock whose record changed under it', function () {

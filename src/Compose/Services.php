@@ -94,6 +94,34 @@ final readonly class Services
     }
 
     /**
+     * Why booting $service is about to go wrong, or null when this file
+     * declares it.
+     *
+     * `bin/sail` reads `${APP_SERVICE:-"laravel.test"}` from the file it
+     * sources and a create runs `sail up -d` against whatever that resolves to,
+     * so a name the Compose file does not carry is a boot that fails — after
+     * the throwaway Composer container has spent minutes resolving a `vendor/`.
+     * `worktree doctor` has always said so and nothing else in the package did
+     * (#74); this is the sentence, so that the pre-flight a create makes and the
+     * line a report prints cannot come apart.
+     *
+     * It is worth saying and not worth refusing over: `include:` and `extends:`
+     * are not followed here, so a service reached through one of those is real
+     * and invisible, and a refusal over it would be this package telling
+     * somebody their working application is broken.
+     */
+    public function undeclared(string $service): ?string
+    {
+        if ($this->declares($service)) {
+            return null;
+        }
+
+        return "$this->file declares no service named '$service', which is what ".AppService::Variable
+            .' resolves to in this checkout; a create runs \'sail up -d '.$service.'\', so either that name is wrong '
+            .'or the service is reached through an include: or extends:, which is not followed here';
+    }
+
+    /**
      * Everything a bare `up` would start: every service that claims no profile.
      *
      * A service under a profile is started only when something names it — a

@@ -114,7 +114,7 @@ final readonly class Identities
             throw new WorktreeException("'$argument' has nothing in it to name a worktree with; give it letters or digits");
         }
 
-        $key = self::Marker.$this->repoSlug().'-'.$slug;
+        $key = $this->keyFor($slug);
 
         // Unreachable while both halves are what they claim to be, which is the
         // point: a project name is validated where it is built, not left for
@@ -133,7 +133,7 @@ final readonly class Identities
             // A numeric argument has no branch of its own to preserve — the slug
             // *is* the name it asked for. A named one means the ref it typed.
             $numeric ? $slug : $argument,
-            dirname($this->anchor->mainRoot).'/'.$this->repoSlug().self::Directory.'/'.$slug,
+            $this->pathFor($slug),
         );
 
         $this->refuseCollision($identity);
@@ -170,7 +170,7 @@ final readonly class Identities
         }
 
         $pull = $this->pullRequests->view($number);
-        $key = self::Marker.$this->repoSlug().'-'.$pull->slug;
+        $key = $this->keyFor($pull->slug);
 
         if (! Slug::isProjectName($key)) {
             throw new WorktreeException(
@@ -184,7 +184,7 @@ final readonly class Identities
             $pull->slug,
             $key,
             $this->registeredBranch($key) ?? $pull->headRef,
-            dirname($this->anchor->mainRoot).'/'.$this->repoSlug().self::Directory.'/'.$pull->slug,
+            $this->pathFor($pull->slug),
         );
     }
 
@@ -229,7 +229,37 @@ final readonly class Identities
             throw new WorktreeException("'$argument' has nothing in it to name a worktree with; give it letters or digits");
         }
 
-        return $this->registry->entry(self::Marker.$this->repoSlug().'-'.$slug);
+        return $this->registry->entry($this->keyFor($slug));
+    }
+
+    /**
+     * The Compose project name a worktree slugged $slug gets: the marker, this
+     * repository, and the slug.
+     */
+    public function keyFor(string $slug): string
+    {
+        return $this->prefix().$slug;
+    }
+
+    /**
+     * Where a worktree slugged $slug goes.
+     */
+    public function pathFor(string $slug): string
+    {
+        return $this->worktreesDirectory().'/'.$slug;
+    }
+
+    /**
+     * The directory this repository's worktrees live in — `../<repo-slug>-worktrees`.
+     *
+     * Assembled here and nowhere else (#74). It is two constants and a slug, so
+     * every caller that wanted it wrote it out; `worktree doctor` reports this
+     * path, and a report that assembled it itself would go stale the day the
+     * parent directory became configurable.
+     */
+    public function worktreesDirectory(): string
+    {
+        return dirname($this->anchor->mainRoot).'/'.$this->repoSlug().self::Directory;
     }
 
     /**
@@ -243,7 +273,7 @@ final readonly class Identities
      */
     private function numbered(string $number): ?Entry
     {
-        $prefix = self::Marker.$this->repoSlug().'-';
+        $prefix = $this->prefix();
         $matches = [];
 
         foreach ($this->registry->all() as $key => $entry) {
@@ -261,6 +291,15 @@ final readonly class Identities
         }
 
         return $matches[0] ?? null;
+    }
+
+    /**
+     * What every key of this repository begins with, and what a scan of the
+     * machine-global registry scopes itself by.
+     */
+    private function prefix(): string
+    {
+        return self::Marker.$this->repoSlug().'-';
     }
 
     /**

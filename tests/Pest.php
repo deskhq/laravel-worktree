@@ -1,5 +1,6 @@
 <?php
 
+use DeskHQ\LaravelWorktree\Compose\PublishedPorts;
 use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Console\Output;
 use DeskHQ\LaravelWorktree\Console\ShutdownHandler;
@@ -775,6 +776,32 @@ function portsAreFree(array $ports): bool
     }
 
     return $free;
+}
+
+/**
+ * The published-port refusal the repository at $root would be given, asked of
+ * the module that owns it rather than typed out again.
+ *
+ * The shape an assertion about a *carried* message wants: it says "what this
+ * command printed is what the pre-flight builds", which is the property worth
+ * asserting, and it goes on saying it after somebody rewords the pre-flight.
+ * The wording itself is pinned once, by PublishedPortsTest — the report and the
+ * refusal used to pin it a second and third time, and where the copies disagreed
+ * it was the copies that were wrong (#74).
+ *
+ * Declared here because two command cases assert against it, and a helper only
+ * one file declares is a helper that is missing whenever that file is not the
+ * one being run.
+ */
+function publishedPortRefusal(string $root): string
+{
+    $refusal = PublishedPorts::of($root)->problem(
+        configurationIn(test()->home, require $root.'/config/worktree.php')
+    );
+
+    expect($refusal)->not->toBeNull();
+
+    return (string) $refusal;
 }
 
 /**

@@ -5,12 +5,15 @@ namespace DeskHQ\LaravelWorktree\Console;
 use DeskHQ\LaravelWorktree\Bootstrap\Outcome;
 use DeskHQ\LaravelWorktree\Bootstrap\Pipeline;
 use DeskHQ\LaravelWorktree\Bootstrap\Readiness;
+use DeskHQ\LaravelWorktree\Compose\AppService;
 use DeskHQ\LaravelWorktree\Compose\ComposeVersion;
 use DeskHQ\LaravelWorktree\Compose\Overlay;
 use DeskHQ\LaravelWorktree\Compose\PublishedPorts;
+use DeskHQ\LaravelWorktree\Compose\Services;
 use DeskHQ\LaravelWorktree\Config\Configuration;
 use DeskHQ\LaravelWorktree\Config\EnvFile;
 use DeskHQ\LaravelWorktree\Exceptions\UsageException;
+use DeskHQ\LaravelWorktree\Exceptions\WorktreeException;
 use DeskHQ\LaravelWorktree\Git\Anchor;
 use DeskHQ\LaravelWorktree\Git\BaseRefs;
 use DeskHQ\LaravelWorktree\Git\Excludes;
@@ -186,7 +189,7 @@ final readonly class CreateCommand implements Command
         } else {
             // The last free moment: after this a slot is claimed, a directory
             // exists and a refusal costs a teardown. Pure parsing, no daemon.
-            PublishedPorts::of($anchor->mainRoot)->verify($config);
+            $this->preflight($anchor, $config);
 
             $entry = $fleet->allocate($identity->key, $identity->slug, $identity->branch, $identity->path);
 
@@ -222,6 +225,35 @@ final readonly class CreateCommand implements Command
         $outcome->announce($this->output);
 
         return ExitCode::Success;
+    }
+
+    /**
+     * What can be known about this repository before anything exists to undo.
+     *
+     * Both halves are pure parsing of the main checkout's Compose file — no
+     * daemon, no slot, nothing written — and both are checks `worktree doctor`
+     * makes. The published-port collision is a refusal, because the alternative
+     * is `Bind for :::6379 failed` minutes in ({@see PublishedPorts}). The app
+     * service is a line rather than a refusal, for the reason
+     * {@see Services::undeclared()} gives — but it is said *here*, before the
+     * throwaway Composer container spends minutes on a `vendor/` for a boot that
+     * is going to fail on the service name (#74).
+     *
+     * @throws WorktreeException when a service this worktree starts publishes a host port nothing offsets.
+     */
+    private function preflight(Anchor $anchor, Configuration $config): void
+    {
+        // Read once and handed to both: a file parsed twice is a file two
+        // checks of one run can disagree about.
+        $services = Services::in($anchor->mainRoot);
+        $appService = AppService::at($anchor->mainRoot);
+        $undeclared = $services->undeclared($appService);
+
+        if ($undeclared !== null) {
+            $this->output->line($undeclared);
+        }
+
+        (new PublishedPorts($services, $appService))->verify($config);
     }
 
     /**

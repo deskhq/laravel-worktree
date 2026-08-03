@@ -622,9 +622,9 @@ a 'worktree create' would stop on the failure above; nothing was created, starte
 | --- | --- |
 | `config` | `config/worktree.php` loads, and says nothing this package does not understand |
 | `names` | this repository has a name, and it is one Docker will accept as a project |
-| `compose` | Docker Compose is new enough for the `!override` merge tag |
+| `compose` | Docker Compose is new enough for the `!override` merge tag — a failure when this repository's `compose` configuration writes an [overlay](#the-compose-overlay), a warning when it writes none, since then the tag is never used |
 | `service` | `APP_SERVICE` resolves to a service the [Compose file](#the-compose-overlay) declares |
-| `sail` | there is a `laravel/sail` for the worktree to be driven through |
+| `sail` | this repository *declares* a `laravel/sail` for the worktree to be driven through — a warning rather than a failure, because a path repository or a `replace` produces one this cannot see, and only the install itself settles it |
 | `ports` | [every published host port](#the-published-port-pre-flight) a worktree's services bind is offset per worktree |
 | `docker` | there is a daemon to boot anything on |
 | `gh` | issue titles are available, which is what names a numeric slug — and `create --pr` has something to ask |
@@ -644,6 +644,16 @@ Every check runs. One that fails does not stop the ones after it, because *"it f
 | `unchecked` | the question could not be put at all |
 
 `unchecked` is the one worth defending. With no daemon answering, the orphan scan is not passing and is not failing, and reporting a machine as clean on the strength of a question nobody could ask is [the failure this package keeps a whole class for](#reaping). The same goes for a `config/worktree.php` that will not load: `doctor` reports it as a failed check — every other command ends on it before it reaches a command at all — and then marks everything that reads that file `unchecked` rather than passing it.
+
+### Every check is the command's own check
+
+A report is only worth reading if it is neither stricter nor looser than the run it describes, so each check here is made by the module that enforces it rather than restated: the port block is [the allocator's own search](#slots-ports-and-the-registry) without the claim, the exhausted registry is the sentence a create refuses with, the published-port collision is [the pre-flight's](#the-published-port-pre-flight), the lock holder is described in the words the run that waits for it uses, and the app-service warning is the one `create` prints for itself before it bootstraps anything.
+
+Where the two used to disagree, the disagreement was the bug rather than the wording:
+
+- an old Compose is a **failure** only when this repository's configuration actually writes an overlay, because a create never reaches that check otherwise;
+- a `composer.json` that does not name Sail is a **warning**, because the runtime asks a different and later question — whether the install produced `vendor/bin/sail` — and it is entitled to a different answer;
+- and a closed Docker daemon is still only a warning here, so that a CI runner without one can check everything that is pure computation — but a `create` no longer discovers it three minutes in, on the exit code of `sail up -d`. It refuses up front, naming the daemon.
 
 Nothing here writes anything. The registry, the lock directory and the Compose file are read, the daemon is asked what it has, and the bind probe opens sockets and closes them again. No slot is claimed, no lock is taken, no directory is made and no container is started.
 
@@ -999,6 +1009,8 @@ Without containers there are no host ports to collide over, nothing to tear down
 **Sail is a soft dependency.** It is detected, never required, and it is not in this package's `require`. An application without it gets a message naming the fix rather than a stack trace three minutes into a bootstrap.
 
 ### Boot
+
+The daemon is asked first, and a boot against one that is not answering refuses there and then. A teardown and a stop have always short-circuited that way; a boot used to pull a `vendor/` through a Composer container that could not start either, and then fail on the exit code of `sail up -d` with nothing on screen naming the daemon.
 
 A fresh worktree has no `vendor/`, so it has no `vendor/bin/sail` either — and Sail is how everything after this runs. The way out is a throwaway Composer container, which is emphatically *not* the app runtime: it lacks the application's extensions and cannot run its post-install scripts, hence `--ignore-platform-reqs --no-scripts`. It produces just enough `vendor/` to obtain Sail, and the authoritative install is an ordinary bootstrap step inside the app container afterwards. `WORKTREE_COMPOSER_IMAGE` overrides the image, which defaults to `laravelsail/php84-composer:latest`.
 

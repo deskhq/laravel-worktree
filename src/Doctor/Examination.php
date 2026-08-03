@@ -71,6 +71,23 @@ use DeskHQ\LaravelWorktree\Runtime\SailRuntime;
  * either: reporting a machine as healthy on the strength of a question nobody
  * could answer is the shape of the-desk#1095, and it is the one mistake a
  * command called `doctor` must not make.
+ *
+ * ## Nothing here decides anything
+ *
+ * Every judgement below belongs to the module that enforces it, and this file
+ * composes them (#74). The free-slot search is {@see Allocator::search()}'s, the
+ * exhaustion sentence {@see Allocator::exhaustion()}'s, the published-port
+ * refusal {@see PublishedPorts::problem()}'s, the lock liveness clause
+ * {@see Owner::heldBy()}'s, the worktree path {@see Identities}', and the dead
+ * entries {@see DeadEntry}'s. Five of these were re-derived here in this file's
+ * own words, and two of them had already drifted from the run they claimed to
+ * be reporting on.
+ *
+ * What is genuinely this command's own stays: the {@see Verdict} vocabulary,
+ * `Unchecked` for a question it could not put, the `--json` shape, the ordering
+ * of the report, and the sentences that describe a *healthy* answer — which no
+ * refusal anywhere has, because nothing else in the package has occasion to say
+ * that anything is fine.
  */
 final class Examination
 {
@@ -82,6 +99,12 @@ final class Examination
     private ?Docker $docker = null;
 
     private ?Registry $registry = null;
+
+    private ?Locks $locks = null;
+
+    private ?Identities $identities = null;
+
+    private ?Allocator $allocator = null;
 
     public function __construct(
         private readonly Anchor $anchor,
@@ -162,6 +185,11 @@ final class Examination
      * one that can fail — a checkout whose name slugifies to nothing has no legal
      * Compose project name to build keys out of, and every command that scopes
      * itself to this repository fails on it ({@see Identities::repoSlug()}).
+     *
+     * The directory is asked for rather than assembled: it is two constants and
+     * a slug, and a report that spelled it out itself would go on saying
+     * `../<slug>-worktrees` the day {@see Identities} put worktrees anywhere
+     * else (#74).
      */
     private function names(): Finding
     {
@@ -172,13 +200,15 @@ final class Examination
         }
 
         try {
-            $slug = $this->repoSlug($config);
+            $identities = $this->identitiesOf($config);
+            $slug = $identities->repoSlug();
+            $directory = $identities->worktreesDirectory();
         } catch (WorktreeException $unnamed) {
             return Finding::failed('names', $unnamed->getMessage());
         }
 
         return Finding::passed('names', "this repository is '$slug', so its worktrees are Compose projects named "
-            .Identities::Marker.$slug.'-<slug>, in '.dirname($this->anchor->mainRoot).'/'.$slug.Identities::Directory);
+            .$identities->keyFor('<slug>').", in $directory");
     }
 
     /**
@@ -189,6 +219,19 @@ final class Examination
      * `depends_on` where `!override` replaces it, so the worktree starts every
      * service the application declares and quietly becomes the thing this package
      * exists to avoid.
+     *
+     * ## Graded by whether this repository writes an overlay
+     *
+     * {@see Overlay::generate()} returns before the version is verified when the
+     * configuration declares no `keep_services` and no `port_overrides`, so on
+     * such a repository a create never asks this question at all — and a report
+     * that failed over it was refusing a machine that would have worked (#74).
+     * The merge tag is still worth a line, because adding one `keep_services`
+     * entry makes it load-bearing that afternoon; it is just not a create
+     * stopping, which is what {@see Verdict::Failed} means here.
+     *
+     * A Compose that is missing outright is a failure either way: `sail up -d`
+     * is Compose, overlay or no overlay.
      */
     private function composeVersion(): Finding
     {
@@ -196,7 +239,17 @@ final class Examination
         $problem = $compose->problem();
 
         if ($problem !== null) {
-            return Finding::failed('compose', $problem);
+            $absent = $compose->found() === null;
+
+            // With no configuration read, nothing here knows whether an overlay
+            // would be written, and the stricter reading is the safe one.
+            if ($absent || $this->config === null || Overlay::isWritten($this->config->compose)) {
+                return Finding::failed('compose', $problem);
+            }
+
+            return Finding::warned('compose', $problem."\nnothing in this repository's 'compose' configuration writes "
+                .Overlay::File.' — no keep_services, no port_overrides — so a create would not reach this check; the '
+                .'first entry added to either makes it stop here');
         }
 
         $found = $compose->found();
@@ -227,6 +280,11 @@ final class Examination
      * service reached only through one of those is real and unseen here, and a
      * refusal over it would be this command telling somebody their working
      * application is broken.
+     *
+     * This used to be the one judgement in the report that existed nowhere else
+     * in the package, so nothing said it until `sail up -d` failed on the far
+     * side of a `vendor/` bootstrap. It is now {@see Services::undeclared()}'s
+     * sentence, and `create` says it in its own pre-flight (#74).
      */
     private function appService(): Finding
     {
@@ -244,26 +302,37 @@ final class Examination
         }
 
         $service = AppService::at($this->anchor->mainRoot);
+        $undeclared = $compose->undeclared($service);
 
-        if ($compose->declares($service)) {
+        if ($undeclared === null) {
             return Finding::passed('service', "the app service is '$service', which $compose->file declares; "
                 ."a create boots the worktree with 'sail up -d $service'");
         }
 
-        return Finding::warned('service', "$compose->file declares no service named '$service', which is what "
-            .AppService::Variable." resolves to in this checkout; a create runs 'sail up -d $service', so either that "
-            .'name is wrong or the service is reached through an include: or extends:, which is not followed here');
+        return Finding::warned('service', $undeclared);
     }
 
     /**
-     * Whether there is a Sail for a worktree to be driven through.
+     * Whether this repository declares the Sail a worktree is driven through.
      *
      * A fresh worktree has no `vendor/`, so `create` builds one through a
      * throwaway Composer container purely to obtain `vendor/bin/sail`
      * ({@see SailRuntime}) — which means the question here is not whether this
      * checkout has Sail installed, but whether the `composer.json` a worktree
-     * would resolve asks for it. Either answer passes; neither is the failure
-     * that arrives three minutes into a bootstrap.
+     * would resolve asks for it.
+     *
+     * ## Two checks, one remedy
+     *
+     * This is the *declared dependency*, and {@see SailRuntime::obtainSail()} is
+     * the *produced file*: it never reads `composer.json`, it bootstraps
+     * `vendor/` and looks for the binary. Those are different questions, and
+     * this one is the weaker of the two — a path repository, a `replace`, a fork
+     * under another name, or a `composer.json` this could not read all resolve to
+     * a Sail that is really there. So a manifest that does not name it warns
+     * rather than refuses (#74): being *stricter* than the run being reported on
+     * is how a report ends up telling somebody their working repository is
+     * broken. What they share is the one instruction that fixes it,
+     * {@see SailRuntime::Install}, written once.
      */
     private function sail(): Finding
     {
@@ -281,10 +350,11 @@ final class Examination
                 .'worktree through a throwaway Composer container before anything else runs');
         }
 
-        return Finding::failed('sail', 'a worktree is driven through Sail, and this checkout has neither '
+        return Finding::warned('sail', 'a worktree is driven through Sail, and this checkout has neither '
             .SailRuntime::Binary.' nor a laravel/sail entry in '.(is_file($manifest) ? 'composer.json' : 'a composer.json')
-            .'; a create would bootstrap vendor/ and still find no '.SailRuntime::Binary
-            .' (composer require laravel/sail --dev)');
+            .'; a create bootstraps vendor/ through a throwaway Composer container and refuses if no '
+            .SailRuntime::Binary.' appears — which it still may, through a path repository or a replace, so only that '
+            .'install can settle it ('.SailRuntime::Install.')');
     }
 
     /**
@@ -336,6 +406,12 @@ final class Examination
      * moment rather than a misconfiguration. Failing on it would also make
      * `worktree doctor` useless in the place the issue names first, which is a CI
      * job checking a `compose.yaml` change on a runner that has no daemon at all.
+     *
+     * It stays a warning here, and it is a refusal in the one place something is
+     * actually about to be started: {@see SailRuntime::boot()} asks the same
+     * question before it pulls anything, which it did not until #74 — a report
+     * being *looser* than the run is how somebody spends three minutes on a
+     * `vendor/` and then reads an exit code.
      */
     private function daemon(): Finding
     {
@@ -381,6 +457,13 @@ final class Examination
      * Machine-wide, because slots are: host ports are a machine-scoped resource,
      * so a second clone of this repository draws from the same registry, and a
      * count scoped to this checkout would answer a question nobody asked.
+     *
+     * The count is this command's own — nothing else in the package has occasion
+     * to say that four of fifty slots are taken. The exhaustion is not: it is
+     * the refusal a create raises, {@see Allocator::exhaustion()}, including the
+     * decision between `reap` and `reap --all`, which this file used to hardcode
+     * as `--all` and therefore got wrong whenever every dead entry was this
+     * checkout's (#74).
      */
     private function slots(): Finding
     {
@@ -404,14 +487,7 @@ final class Examination
                 .$free.($free === 1 ? ' is' : ' are').' free');
         }
 
-        $dead = count(array_filter($entries, DeadEntries::isDead(...)));
-
-        return Finding::failed('slots', "all $config->slots slots are in use, so the next "
-            ."'worktree create' of a worktree that does not have one has nowhere to put it; "
-            .($dead === 0
-                ? "free one with 'worktree remove <slug>', or raise 'slots'"
-                : $dead.' of them '.($dead === 1 ? 'is held by a registry entry whose' : 'are held by registry entries whose')
-                  ." worktree directory is gone, which 'worktree reap --all' reclaims"));
+        return Finding::failed('slots', $this->allocatorOf($config)->exhaustion($this->anchor->mainRoot));
     }
 
     /**
@@ -427,6 +503,15 @@ final class Examination
      *
      * **This is TOCTOU and is documented as such**, exactly as the probe itself
      * is: the answer is a strong hint about this instant, not a reservation.
+     *
+     * The search is {@see Allocator::search()} — the same loop, over the same
+     * registry, probing the same blocks, and refusing with the same sentence.
+     * This file walked the range itself until #74, and the two copies had
+     * already come apart: one read the claimed slots through the registry and
+     * the other mapped over the entries. What is still written here is what a
+     * *report* has to add — which slot a create would land on, and why each
+     * skipped one was skipped, in a tense that fits something that has not
+     * happened yet.
      */
     private function portBlock(): Finding
     {
@@ -436,49 +521,35 @@ final class Examination
             return Finding::unchecked('block', self::Unconfigured);
         }
 
-        $entries = $this->entriesOf($config);
-
-        if ($entries instanceof WorktreeException) {
+        try {
+            $search = $this->allocatorOf($config)->search();
+        } catch (WorktreeException) {
             return Finding::unchecked('block', 'the registry could not be read, so the slots it holds are not known; '
                 .'the slot check above says why');
         }
 
-        $claimed = array_map(fn (Entry $entry): int => $entry->slot, array_values($entries));
-        $ports = Ports::fromConfiguration($config);
-        $probe = new BindProbe;
-        $skipped = [];
+        $skipped = array_map(
+            fn (array $skip): string => 'slot '.$skip['slot'].' is free in the registry, but port '.$skip['port']
+                .' ('.$skip['name'].') of its block is already in use by something the registry does not know about, '
+                .'so a create would skip it',
+            $search->skipped,
+        );
 
-        for ($slot = 0; $slot < $config->slots; $slot++) {
-            if (in_array($slot, $claimed, true)) {
-                continue;
-            }
+        if ($search->slot !== null) {
+            $free = "slot $search->slot is the next one a create would take, and its ports ("
+                .self::describe(Ports::fromConfiguration($config)->forSlot($search->slot)).') are free';
 
-            $block = $ports->forSlot($slot);
-            $taken = $probe->firstTaken($block);
-
-            if ($taken === null) {
-                $free = "slot $slot is the next one a create would take, and its ports ("
-                    .self::describe($block).') are free';
-
-                return $skipped === []
-                    ? Finding::passed('block', $free)
-                    : Finding::warned('block', implode("\n", $skipped)."\n".$free);
-            }
-
-            [$name, $port] = $taken;
-
-            $skipped[] = "slot $slot is free in the registry, but port $port ($name) of its block is already in use by "
-                .'something the registry does not know about, so a create would skip it';
+            return $skipped === []
+                ? Finding::passed('block', $free)
+                : Finding::warned('block', implode("\n", $skipped)."\n".$free);
         }
 
-        if ($skipped === []) {
+        if ($search->exhausted()) {
             return Finding::unchecked('block', 'every slot on this machine is claimed, so there is no next port block '
                 .'to probe; the slot check above says what that means');
         }
 
-        return Finding::failed('block', 'no free slot has a free port block ('.count($skipped).' of '
-            .$config->slots.' slots skipped by the bind probe); stop whatever is holding those ports, or move '
-            ."port_base:\n".implode("\n", $skipped));
+        return Finding::failed('block', $search->refusal().":\n".implode("\n", $skipped));
     }
 
     /**
@@ -489,6 +560,11 @@ final class Examination
      * worth saying, because a lock nobody can prove anything about is one every
      * run waits ten minutes for, and `worktree unlock` is the way out that people
      * do not find until they need it.
+     *
+     * The judgement was always shared — {@see Owner::liveness()} decides for all
+     * three callers — and the *sentence* around it now is too
+     * ({@see Owner::heldBy()}): a lock this report calls stale and the run that
+     * waits for it describe it in the same words (#74).
      */
     private function locks(): Finding
     {
@@ -498,7 +574,7 @@ final class Examination
             return Finding::unchecked('locks', self::Unconfigured);
         }
 
-        $locks = new Locks($config->home, $this->shutdown, $this->output);
+        $locks = $this->locksOf($config);
         $taken = $locks->taken();
 
         if ($taken === []) {
@@ -518,17 +594,15 @@ final class Examination
             }
 
             $liveness = $owner->liveness($locks->machine());
-            $held = 'taken by '.$owner->describe();
+            $held = $owner->heldBy($liveness);
 
             if ($liveness === Liveness::Alive) {
-                $running[$lock->path()] = $held.', which is still running';
+                $running[$lock->path()] = $held;
 
                 continue;
             }
 
-            $unsettled[$lock->path()] = $held.($liveness === Liveness::Gone
-                ? ', which is not running any more'
-                : ', on another machine — nothing here can tell whether it is still running');
+            $unsettled[$lock->path()] = $held;
         }
 
         if ($unsettled === []) {
@@ -602,7 +676,7 @@ final class Examination
         }
 
         try {
-            $slug = $this->repoSlug($config);
+            $slug = $this->identitiesOf($config)->repoSlug();
             $orphans = (new Orphans($this->docker(), $this->registryOf($config)))->under(Orphans::prefix($slug));
         } catch (WorktreeException $unscannable) {
             return Finding::unchecked('orphans', 'the scan could not be scoped to this repository: '.$unscannable->getMessage());
@@ -684,21 +758,49 @@ final class Examination
     }
 
     /**
-     * What names this repository, asked once however many checks want it.
+     * What this repository's worktrees are called and where they go, built once
+     * however many checks want it.
      *
-     * @throws WorktreeException when the checkout's directory name slugifies to nothing.
+     * Handed the registry this run already has, rather than opening a second one
+     * of its own: a run holds one registry.
      */
-    private function repoSlug(Configuration $config): string
+    private function identitiesOf(Configuration $config): Identities
     {
-        // Handed the registry this run already has, rather than opening a
-        // second one of its own: a run holds one registry.
-        return Identities::fromConfiguration(
+        return $this->identities ??= Identities::fromConfiguration(
             $config,
             $this->anchor,
             $this->runner,
             $this->output,
             $this->registryOf($config),
-        )->repoSlug();
+        );
+    }
+
+    /**
+     * The allocator, for the two checks that ask it what a create would do
+     * without letting it do any of it.
+     *
+     * Built over this run's registry and this run's locks, exactly as every
+     * command's fleet builds one — and neither of the things asked of it takes
+     * a lock or writes anything ({@see Allocator::search()},
+     * {@see Allocator::exhaustion()}), which is what keeps this command's claim
+     * true.
+     */
+    private function allocatorOf(Configuration $config): Allocator
+    {
+        return $this->allocator ??= Allocator::over(
+            $this->registryOf($config),
+            $this->locksOf($config),
+            $config,
+            $this->output,
+        );
+    }
+
+    /**
+     * This machine's locks, read by the lock check and held by nothing.
+     */
+    private function locksOf(Configuration $config): Locks
+    {
+        return $this->locks ??= new Locks($config->home, $this->shutdown, $this->output);
     }
 
     /**

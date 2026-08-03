@@ -170,6 +170,46 @@ it('names the machine-wide sweep when only some of the dead slots are this check
     deleteDirectory($home);
 });
 
+/**
+ * The search without the claim: the same loop, over the same registry, probing
+ * the same blocks — which is what `worktree doctor` reports on, having walked
+ * the range itself until #74. It takes no lock and writes nothing, and that is
+ * the property that lets a command claiming to create nothing ask it.
+ */
+it('says which slot a create would take next, and what it would skip, without claiming any of it', function () {
+    $registry = $this->home.'/registry.json';
+
+    claim($this->allocator, 'wt-desk-441');
+
+    $held = stream_socket_server('tcp://0.0.0.0:'.($this->base + 12), $code, $message, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN);
+    $before = (string) file_get_contents($registry);
+
+    $search = $this->allocator->search();
+
+    fclose($held);
+
+    expect($search->slot)->toBe(2)
+        ->and($search->skipped)->toBe([['slot' => 1, 'name' => 'reverb', 'port' => $this->base + 12]])
+        ->and($search->exhausted())->toBeFalse()
+        // Nothing claimed, nothing locked: the registry is the file it was.
+        ->and(file_get_contents($registry))->toBe($before)
+        ->and($this->locks->registry()->isHeld())->toBeFalse()
+        ->and($this->home.'/registry.lock')->not->toBeDirectory();
+});
+
+it('tells a range with nothing free left in it from one with nothing probeable left', function () {
+    $allocator = allocatorIn($this->home, $this->base, $this->diagnostics, slots: 1);
+
+    claim($allocator, 'wt-desk-441');
+
+    expect($allocator->search())
+        ->slot->toBeNull()
+        ->skipped->toBe([])
+        // Every slot claimed, so there was no block left to probe — which is a
+        // different answer, and a different remedy, from a block that is held.
+        ->and($allocator->search()->exhausted())->toBeTrue();
+});
+
 it('refuses when every free slot has a port the machine is already using', function () {
     $allocator = allocatorIn($this->home, $this->base, $this->diagnostics, slots: 2);
 
